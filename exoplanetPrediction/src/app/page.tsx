@@ -24,6 +24,42 @@ type Candidate = {
   snr: string;
 };
 
+type BackendCandidate = {
+  id: string;
+  score: number | string;
+  period?: number | string;
+  depth?: number | string;
+  duration?: number | string;
+  snr?: number | string;
+};
+
+type AnalysisResult = {
+  metrics?: Record<string, number | string>;
+  candidates?: BackendCandidate[];
+  downloads?: {
+    predictionsCsvUrl?: string;
+    reportPdfUrl?: string;
+    modelCardUrl?: string;
+  };
+  status?: string;
+  message?: string;
+};
+
+type RunStatus = "idle" | "running" | "error" | "done";
+
+type DownloadStatus = "Ready" | "Queued" | "Processing" | "Unavailable";
+
+const metricLabelMap: Record<string, string> = {
+  precision: "Precision",
+  recall: "Recall",
+  rocauc: "ROC AUC",
+  "roc-auc": "ROC AUC",
+  rocAuc: "ROC AUC",
+  prauc: "PR AUC",
+  "pr-auc": "PR AUC",
+  prAuc: "PR AUC",
+};
+
 const datasetOptions: DatasetOption[] = [
   {
     id: "tess-sample",
@@ -76,7 +112,18 @@ const mockCandidates: Candidate[] = [
   { id: "KIC-8120608", score: 0.86, period: "11.02 d", depth: "450 ppm", duration: "4.0 hr", snr: "8.9" },
 ];
 
+const defaultMetrics: Record<string, number> = {
+  precision: 0.91,
+  recall: 0.87,
+  rocAuc: 0.95,
+  prAuc: 0.92,
+};
+
 export default function Home() {
+  const [runStatus, setRunStatus] = useState<RunStatus>("idle");
+  const [results, setResults] = useState<AnalysisResult | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   const [dataset, setDataset] = useState<string>(datasetOptions[0]?.id ?? "");
   const [targetMode, setTargetMode] = useState<"single" | "bulk">("single");
   const [targetId, setTargetId] = useState("");
@@ -100,6 +147,152 @@ export default function Home() {
     () => datasetOptions.find((option) => option.id === dataset),
     [dataset],
   );
+
+  const targetIdentifiers = useMemo(() => {
+    if (targetMode === "single") {
+      const trimmed = targetId.trim();
+      return trimmed ? [trimmed] : [];
+    }
+
+    return bulkTargets
+      .split("\n")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+  }, [targetMode, targetId, bulkTargets]);
+
+  const targetSummary = useMemo(() => {
+    if (targetMode === "single") {
+      return targetId.trim();
+    }
+
+    const count = targetIdentifiers.length;
+    return count > 0 ? `${count} target${count === 1 ? "" : "s"}` : "";
+  }, [targetMode, targetId, targetIdentifiers]);
+
+  const derivedStatus: RunStatus = useMemo(() => {
+    const backendStatus = results?.status?.toLowerCase();
+    if (!backendStatus) {
+      return runStatus;
+    }
+
+    if (["running", "processing", "pending"].includes(backendStatus)) {
+      return "running";
+    }
+
+    if (["done", "completed", "success"].includes(backendStatus)) {
+      return "done";
+    }
+
+    if (["failed", "error"].includes(backendStatus)) {
+      return "error";
+    }
+
+    return runStatus;
+  }, [results?.status, runStatus]);
+
+  const metricItems = useMemo(() => {
+    const source = results?.metrics && Object.keys(results.metrics).length > 0 ? results.metrics : defaultMetrics;
+    return Object.entries(source).map(([key, value]) => ({
+      label: formatMetricLabel(key),
+      value: coerceNumber(value, 0),
+    }));
+  }, [results]);
+
+  const candidateSummaries = useMemo<Candidate[]>(() => {
+    if (!results?.candidates || results.candidates.length === 0) {
+      return mockCandidates;
+    }
+
+    return results.candidates.map((candidate) => ({
+      id: candidate.id,
+      score: coerceNumber(candidate.score, 0),
+      period: formatWithUnit(candidate.period, "d"),
+      depth: formatWithUnit(candidate.depth, "ppm"),
+      duration: formatWithUnit(candidate.duration, "hr"),
+      snr: formatWithUnit(candidate.snr, ""),
+    }));
+  }, [results]);
+
+  const isRunDisabled = runStatus === "running" || !dataset || targetIdentifiers.length === 0;
+
+  async function handleRun() {
+    if (!dataset) {
+      setErrorMessage("Select a dataset to continue.");
+      setRunStatus("error");
+      return;
+    }
+
+    if (targetIdentifiers.length === 0) {
+      setErrorMessage("Provide at least one TIC/KIC identifier.");
+      setRunStatus("error");
+      return;
+    }
+
+    const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+    if (!baseUrl) {
+      setErrorMessage("NEXT_PUBLIC_API_BASE_URL is not configured.");
+      setRunStatus("error");
+      return;
+    }
+
+    setRunStatus("running");
+    setErrorMessage(null);
+
+    const payload = {
+      dataset,
+      targets: targetIdentifiers,
+      preprocessing: {
+        detrend,
+        normalize,
+        gapFill,
+        windowLength,
+      },
+      hyperparameters: {
+        model,
+        threshold,
+        epochs,
+        learningRate,
+        batchSize,
+        validationSplit,
+        seed,
+      },
+      periodSearch: {
+        minPeriod,
+        maxPeriod,
+        nPeaks: peakCount,
+      },
+    };
+
+    try {
+      const response = await fetch(buildEndpoint(baseUrl, "/run"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        let message = `Request failed with status ${response.status}`;
+        try {
+          const errorPayload = (await response.json()) as { message?: string } | undefined;
+          if (errorPayload?.message) {
+            message = errorPayload.message;
+          }
+        } catch {
+          // ignore JSON parsing issues for error responses
+        }
+        throw new Error(message);
+      }
+
+      const data = (await response.json()) as AnalysisResult;
+      setResults(data);
+      setRunStatus("done");
+      setErrorMessage(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to contact analysis service.";
+      setRunStatus("error");
+      setErrorMessage(message);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -313,17 +506,21 @@ export default function Home() {
 
           <ReviewCard
             dataset={selectedDataset?.label ?? ""}
-            targetSummary={targetMode === "single" && targetId ? targetId : `${bulkTargets.split("\n").filter(Boolean).length} targets`}
+            targetSummary={targetSummary || (targetMode === "bulk" ? "No targets selected" : "")}
             model={modelOptions.find((option) => option.id === model)?.label ?? ""}
             threshold={threshold}
+            runStatus={runStatus}
+            errorMessage={errorMessage}
+            onRun={handleRun}
+            disabled={isRunDisabled}
           />
         </section>
 
         <section className="space-y-8">
-          <ResultsPanel />
+          <ResultsPanel runStatus={derivedStatus} metrics={metricItems} />
           <DiagnosticsPanel />
-          <CandidateGallery candidates={mockCandidates} />
-          <DownloadsPanel />
+          <CandidateGallery candidates={candidateSummaries} threshold={threshold} />
+          <DownloadsPanel downloads={results?.downloads} runStatus={derivedStatus} />
         </section>
       </main>
     </div>
@@ -458,21 +655,35 @@ function ReviewCard({
   targetSummary,
   model,
   threshold,
+  runStatus,
+  errorMessage,
+  onRun,
+  disabled,
 }: {
   dataset: string;
   targetSummary: string;
   model: string;
   threshold: number;
+  runStatus: RunStatus;
+  errorMessage: string | null;
+  onRun: () => void;
+  disabled: boolean;
 }) {
+  const isRunning = runStatus === "running";
+  const buttonLabel = isRunning ? "Running..." : runStatus === "done" ? "Re-run analysis" : "Run analysis";
+  const buttonClasses = disabled
+    ? "rounded-full bg-cyan-400/40 px-5 py-2 text-sm font-semibold text-slate-900/80 opacity-60"
+    : "rounded-full bg-cyan-400 px-5 py-2 text-sm font-semibold text-slate-950 shadow shadow-cyan-900/40 transition hover:bg-cyan-300";
+
   return (
     <div className="rounded-2xl border border-cyan-500/40 bg-cyan-500/10 p-6 text-sm text-slate-200 shadow-lg shadow-cyan-900/40">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-white">Ready to analyze?</h3>
           <p className="mt-1 text-xs text-cyan-100/80">Review selections and launch the pipeline.</p>
         </div>
-        <button className="rounded-full bg-cyan-400 px-5 py-2 text-sm font-semibold text-slate-950 shadow shadow-cyan-900/40 hover:bg-cyan-300">
-          Run analysis
+        <button type="button" onClick={onRun} disabled={disabled} className={buttonClasses}>
+          {buttonLabel}
         </button>
       </div>
       <dl className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -486,44 +697,74 @@ function ReviewCard({
         </div>
         <div>
           <dt className="text-xs uppercase tracking-wide text-cyan-200/80">Model</dt>
-          <dd className="text-sm text-white">{model}</dd>
+          <dd className="text-sm text-white">{model || "Select a model"}</dd>
         </div>
         <div>
           <dt className="text-xs uppercase tracking-wide text-cyan-200/80">Threshold</dt>
           <dd className="text-sm text-white">{threshold.toFixed(2)}</dd>
         </div>
       </dl>
+      {errorMessage ? (
+        <p className="mt-4 text-xs text-rose-300">{errorMessage}</p>
+      ) : runStatus === "done" ? (
+        <p className="mt-4 text-xs text-emerald-300">Last run completed successfully.</p>
+      ) : null}
     </div>
   );
 }
+function ResultsPanel({
+  runStatus,
+  metrics,
+}: {
+  runStatus: RunStatus;
+  metrics: { label: string; value: number }[];
+}) {
+  const statusLabelMap: Record<RunStatus, string> = {
+    idle: "Awaiting configuration",
+    running: "Processing",
+    error: "Failed",
+    done: "Completed",
+  };
 
-function ResultsPanel() {
-  const metrics = [
-    { label: "Precision", value: "0.91" },
-    { label: "Recall", value: "0.87" },
-    { label: "ROC AUC", value: "0.95" },
-    { label: "PR AUC", value: "0.92" },
-  ];
+  const statusStyleMap: Record<RunStatus, string> = {
+    idle: "border-slate-500/40 bg-slate-500/10 text-slate-200",
+    running: "border-cyan-500/40 bg-cyan-500/10 text-cyan-200",
+    error: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+    done: "border-emerald-400/40 bg-emerald-500/10 text-emerald-200",
+  };
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-white">Run status</h2>
           <p className="text-xs text-slate-300">Monitor aggregate performance across all targets.</p>
         </div>
-        <span className="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">Completed</span>
+        <span className={`rounded-full border px-3 py-1 text-xs ${statusStyleMap[runStatus]}`}>
+          {statusLabelMap[runStatus]}
+        </span>
       </header>
       <div className="mt-6 grid gap-4 sm:grid-cols-2">
-        {metrics.map((metric) => (
-          <div key={metric.label} className="rounded-xl border border-white/10 bg-slate-900/60 p-4">
-            <p className="text-xs uppercase tracking-wide text-slate-400">{metric.label}</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{metric.value}</p>
-            <div className="mt-3 h-2 rounded-full bg-slate-800">
-              <div className="h-full rounded-full bg-cyan-400" style={{ width: `${Number(metric.value) * 100}%` }} />
+        {metrics.map((metric) => {
+          const safeValue = Number.isFinite(metric.value) ? metric.value : 0;
+          const progressRatio = safeValue <= 1 ? safeValue : safeValue / 100;
+          const progressWidth = Math.max(0, Math.min(100, progressRatio * 100));
+
+          return (
+            <div key={metric.label} className="rounded-xl border border-white/10 bg-slate-900/60 p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-400">{metric.label}</p>
+              <p className="mt-2 text-2xl font-semibold text-white">{safeValue.toFixed(2)}</p>
+              <div className="mt-3 h-2 rounded-full bg-slate-800">
+                <div className="h-full rounded-full bg-cyan-400" style={{ width: `${progressWidth}%` }} />
+              </div>
             </div>
+          );
+        })}
+        {metrics.length === 0 ? (
+          <div className="rounded-xl border border-white/10 bg-slate-900/60 p-4 text-sm text-slate-300">
+            Configure and run an analysis to see metrics.
           </div>
-        ))}
+        ) : null}
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <ChartPlaceholder title="Confusion matrix" subtitle="TP/TN vs FP/FN" />
@@ -533,7 +774,6 @@ function ResultsPanel() {
     </div>
   );
 }
-
 function DiagnosticsPanel() {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
@@ -557,7 +797,7 @@ function DiagnosticsPanel() {
   );
 }
 
-function CandidateGallery({ candidates }: { candidates: Candidate[] }) {
+function CandidateGallery({ candidates, threshold }: { candidates: Candidate[]; threshold: number }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
       <header className="flex items-center justify-between">
@@ -578,7 +818,7 @@ function CandidateGallery({ candidates }: { candidates: Candidate[] }) {
               <MetricBadge label="Depth" value={candidate.depth} />
               <MetricBadge label="Duration" value={candidate.duration} />
               <MetricBadge label="SNR" value={candidate.snr} />
-              <MetricBadge label="Threshold" value={candidate.score >= 0.5 ? "Pass" : "Check"} />
+              <MetricBadge label="Threshold" value={candidate.score >= threshold ? "Pass" : "Check"} />
             </div>
           </div>
         ))}
@@ -596,49 +836,101 @@ function MetricBadge({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DownloadsPanel() {
+function DownloadsPanel({
+  downloads,
+  runStatus,
+}: {
+  downloads?: AnalysisResult["downloads"];
+  runStatus: RunStatus;
+}) {
+  const computeStatus = (href?: string): DownloadStatus => {
+    if (href) {
+      return "Ready";
+    }
+    if (runStatus === "running") {
+      return "Processing";
+    }
+    if (runStatus === "error") {
+      return "Unavailable";
+    }
+    return "Queued";
+  };
+
+  const items = [
+    {
+      title: "Predictions CSV",
+      description: "targetId, y_pred, probability, period, depth, duration",
+      href: downloads?.predictionsCsvUrl,
+    },
+    {
+      title: "Report PDF",
+      description: "Transit plots, metrics, and operator notes",
+      href: downloads?.reportPdfUrl,
+    },
+    {
+      title: "Model card JSON",
+      description: "Configuration, data provenance, hyperparameters",
+      href: downloads?.modelCardUrl,
+    },
+  ];
+
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
       <h2 className="text-lg font-semibold text-white">Export deliverables</h2>
       <p className="mt-1 text-xs text-slate-300">Download artifacts for science review or submission packages.</p>
       <div className="mt-6 grid gap-4 sm:grid-cols-3">
-        <DownloadCard title="Predictions CSV" description="targetId, y_pred, probability, period, depth, duration" status="Ready" />
-        <DownloadCard title="Report PDF" description="Transit plots, metrics, and operator notes" status="Queued" />
-        <DownloadCard title="Model card JSON" description="Configuration, data provenance, hyperparameters" status="Ready" />
+        {items.map((item) => (
+          <DownloadCard
+            key={item.title}
+            title={item.title}
+            description={item.description}
+            status={computeStatus(item.href)}
+            href={item.href}
+          />
+        ))}
       </div>
     </div>
   );
 }
-
 function DownloadCard({
   title,
   description,
   status,
+  href,
 }: {
   title: string;
   description: string;
-  status: "Ready" | "Queued" | "Processing";
+  status: DownloadStatus;
+  href?: string;
 }) {
+  const isReady = status === "Ready" && Boolean(href);
+  const idleClasses = status === "Unavailable"
+    ? "border border-rose-500/40 text-rose-300"
+    : "border border-white/15 text-slate-300";
+
   return (
     <div className="flex h-full flex-col justify-between rounded-xl border border-white/10 bg-slate-900/60 p-4 text-sm">
       <div>
         <p className="text-sm font-semibold text-white">{title}</p>
         <p className="mt-2 text-xs text-slate-300">{description}</p>
       </div>
-      <button
-        className={`mt-4 rounded-full px-4 py-2 text-xs font-semibold transition ${
-          status === "Ready"
-            ? "bg-cyan-400 text-slate-950 hover:bg-cyan-300"
-            : "border border-white/15 text-slate-300"
-        }`}
-        disabled={status !== "Ready"}
-      >
-        {status === "Ready" ? "Download" : status}
-      </button>
+      {isReady && href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-4 inline-flex items-center justify-center rounded-full bg-cyan-400 px-4 py-2 text-xs font-semibold text-slate-950 shadow shadow-cyan-900/40 transition hover:bg-cyan-300"
+        >
+          Download
+        </a>
+      ) : (
+        <span className={`mt-4 inline-flex items-center justify-center rounded-full px-4 py-2 text-xs font-semibold ${idleClasses}`}>
+          {status}
+        </span>
+      )}
     </div>
   );
 }
-
 function ChartPlaceholder({
   title,
   subtitle,
@@ -662,5 +954,70 @@ function ChartPlaceholder({
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function coerceNumber(value: number | string | undefined, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return fallback;
+}
+
+function formatWithUnit(value: number | string | undefined, unit: string, digits = 2): string {
+  if (value === undefined) {
+    return unit ? `-- ${unit}` : "--";
+  }
+  const numeric = coerceNumber(value, Number.NaN);
+  if (Number.isNaN(numeric)) {
+    return typeof value === "string" ? value : unit ? `-- ${unit}` : "--";
+  }
+  const formatted = numeric
+    .toFixed(digits)
+    .replace(/\.00$/, "")
+    .replace(/(\.\d)0$/, "$1");
+  return unit ? `${formatted} ${unit}` : formatted;
+}
+
+function formatMetricLabel(key: string): string {
+  const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  if (metricLabelMap[normalized]) {
+    return metricLabelMap[normalized];
+  }
+  return key
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/^./, (char) => char.toUpperCase());
+}
+
+function buildEndpoint(baseUrl: string, path: string) {
+  const normalizedBase = baseUrl.replace(/\/+$/, "");
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${normalizedBase}${normalizedPath}`;
+}
+
+
+
+
+
+
 
 
