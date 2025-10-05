@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Image from "next/image";
-import { ChangeEvent, useState } from "react";
+import { ChangeEvent, useEffect, useState } from "react";
 
 type InputMode = "manual" | "upload";
 type ModelType = "pretrained" | "user";
@@ -41,6 +41,14 @@ type EndpointInfo = {
   details?: string[];
 };
 
+type ModelInfo = {
+  model_type?: string;
+  metrics?: Record<string, unknown>;
+  hyperparameters?: Record<string, unknown>;
+  training_info?: Record<string, unknown>;
+  timestamp?: string;
+};
+
 
 type UploadCardProps = {
   fields: ManualField[];
@@ -74,6 +82,11 @@ const endpointCatalog: EndpointInfo[] = [
     path: "/health",
     description: "Health check endpoint confirming the backend is reachable.",
     details: ["Returns status and timestamp."]
+  },
+  {
+    method: "GET",
+    path: "/info",
+    description: "Retrieve base model metadata, metrics, and training info."
   },
   {
     method: "POST",
@@ -218,6 +231,10 @@ export default function Home() {
   const [uploadInfo, setUploadInfo] = useState<string | null>(null);
   const [uploadRowCount, setUploadRowCount] = useState<number>(0);
 
+  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
+  const [infoLoading, setInfoLoading] = useState(false);
+  const [infoError, setInfoError] = useState<string | null>(null);
+
   const [pretrainedFile, setPretrainedFile] = useState<File | null>(null);
   const [pretrainedSession, setPretrainedSession] = useState("");
   const [pretrainedResult, setPretrainedResult] = useState<Record<string, unknown> | null>(null);
@@ -237,6 +254,39 @@ export default function Home() {
 
   const manualRowCount = manualRows.length;
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchModelInfo() {
+      setInfoLoading(true);
+      setInfoError(null);
+      try {
+        const response = await fetch(new URL('/info', backendUrl).toString());
+        if (!response.ok) {
+          const message = await extractErrorMessage(response);
+          throw new Error(message);
+        }
+        const data = (await response.json()) as ModelInfo;
+        if (!cancelled) {
+          setModelInfo(data);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setInfoError(error instanceof Error ? error.message : 'Failed to load model info.');
+        }
+      } finally {
+        if (!cancelled) {
+          setInfoLoading(false);
+        }
+      }
+    }
+
+    fetchModelInfo();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [backendUrl]);
   function handleManualButtonClick() {
     setInputMode("manual");
     setManualModalOpen(true);
@@ -993,6 +1043,8 @@ function UploadCard({ fields, error, info, onFileChange, onTemplateDownload }: U
     </div>
   );
 }
+
+
 
 
 
