@@ -223,6 +223,15 @@ export default function Home() {
   const [pretrainedResult, setPretrainedResult] = useState<Record<string, unknown> | null>(null);
   const [pretrainedError, setPretrainedError] = useState<string | null>(null);
   const [pretrainedLoading, setPretrainedLoading] = useState(false);
+  const [userTrainFile, setUserTrainFile] = useState<File | null>(null);
+  const [userHyperparams, setUserHyperparams] = useState({
+    learningRate: "0.03",
+    maxDepth: "8",
+    numTrees: "700",
+  });
+  const [userTrainLoading, setUserTrainLoading] = useState(false);
+  const [userTrainError, setUserTrainError] = useState<string | null>(null);
+  const [userTrainResult, setUserTrainResult] = useState<Record<string, unknown> | null>(null);
 
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
@@ -376,6 +385,58 @@ ${sampleRow}`;
 
     event.target.value = "";
   }
+  function handleUserTrainFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    setUserTrainFile(file);
+    setUserTrainResult(null);
+    setUserTrainError(null);
+  }
+
+  function handleUserHyperparamChange(key: keyof typeof userHyperparams, value: string) {
+    setUserHyperparams((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleUserTrainSubmit() {
+    if (!userTrainFile) {
+      setUserTrainError("Select a CSV file before submitting retraining.");
+      return;
+    }
+
+    const learningRate = Number.parseFloat(userHyperparams.learningRate);
+    const maxDepth = Number.parseInt(userHyperparams.maxDepth, 10);
+    const numTrees = Number.parseInt(userHyperparams.numTrees, 10);
+
+    if (Number.isNaN(learningRate) || Number.isNaN(maxDepth) || Number.isNaN(numTrees)) {
+      setUserTrainError("Provide numeric values for learning rate, max depth, and number of trees.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", userTrainFile);
+    formData.append("learning_rate", learningRate.toString());
+    formData.append("max_depth", maxDepth.toString());
+    formData.append("num_trees", numTrees.toString());
+
+    setUserTrainLoading(true);
+    setUserTrainError(null);
+    setUserTrainResult(null);
+
+    try {
+      const retrainUrl = new URL('/retrain', backendUrl).toString();
+      const response = await fetch(retrainUrl, { method: 'POST', body: formData });
+      if (!response.ok) {
+        const message = await extractErrorMessage(response);
+        throw new Error(message);
+      }
+      const data = (await response.json()) as Record<string, unknown>;
+      setUserTrainResult(data);
+    } catch (error) {
+      setUserTrainError(error instanceof Error ? error.message : 'Retraining request failed.');
+    } finally {
+      setUserTrainLoading(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-950 to-slate-900 text-slate-100">
       <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-12 px-6 py-12 lg:px-10">
@@ -573,47 +634,89 @@ ${sampleRow}`;
                     </span>
                     <span className="text-slate-400">Customizable exploration</span>
                   </header>
-                  <div className="rounded-2xl border border-cyan-400/30 bg-slate-950/70 p-6 text-center">
-                    <p className="text-sm uppercase tracking-[0.4em] text-cyan-400">Hyperparameters</p>
-                    <div className="mt-6 grid gap-4">
+                  <div className="w-full rounded-2xl border border-cyan-400/30 bg-slate-950/70 p-6 text-left text-sm text-slate-200">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                      <label className="flex w-full flex-col gap-2 text-xs uppercase tracking-[0.4em]">
+                        <span className="text-cyan-400">Training CSV</span>
+                        <input
+                          type="file"
+                          accept=".csv"
+                          onChange={handleUserTrainFileChange}
+                          className="w-full rounded-xl border border-cyan-400/30 bg-slate-950/60 px-4 py-3 text-sm text-white focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+                        />
+                        <span className="text-[10px] text-slate-500">Required columns: {requiredHeaders.join(', ')}</span>
+                      </label>
+                      <div className="rounded-xl border border-cyan-400/20 bg-slate-900/60 p-4 text-xs text-slate-300">
+                        <p className="text-sm font-semibold text-cyan-200">Hyperparameters</p>
+                        <p className="mt-1 leading-relaxed">Adjust learning rate, tree depth, and ensemble size before retraining.</p>
+                      </div>
+                    </div>
+                    <div className="mt-6 grid gap-4 sm:grid-cols-3">
                       <InputField
                         label="Learning Rate"
                         helper="Float between 0 and 1"
-                        placeholder="0.001"
+                        placeholder="0.03"
                         type="number"
                         min={0}
                         max={1}
                         step={0.0001}
+                        value={userHyperparams.learningRate}
+                        onChange={(value) => handleUserHyperparamChange("learningRate", value)}
                       />
                       <InputField
                         label="Max Tree Depth"
                         helper="Integer (1-2048)"
-                        placeholder="12"
+                        placeholder="8"
                         type="number"
                         min={1}
                         max={2048}
+                        value={userHyperparams.maxDepth}
+                        onChange={(value) => handleUserHyperparamChange("maxDepth", value)}
                       />
                       <InputField
                         label="Number of Trees"
                         helper="Up to 5000 estimators"
-                        placeholder="500"
+                        placeholder="700"
                         type="number"
                         min={1}
                         max={5000}
-                      />
-                      <InputField
-                        label="Hessian Gain"
-                        helper="Custom optimization signal"
-                        placeholder="Auto-detect"
+                        value={userHyperparams.numTrees}
+                        onChange={(value) => handleUserHyperparamChange("numTrees", value)}
                       />
                     </div>
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={handleUserTrainSubmit}
+                        disabled={userTrainLoading}
+                        className={`rounded-full px-5 py-2 text-sm font-semibold transition ${userTrainLoading ? 'bg-cyan-400/30 text-slate-600' : 'bg-cyan-500 text-slate-950 shadow-[0_0_25px_rgba(34,211,238,0.35)] hover:bg-cyan-400'}`}
+                      >
+                        {userTrainLoading ? 'Retraining...' : 'Submit for Retraining'}
+                      </button>
+                      {userTrainFile ? (
+                        <span className="text-xs text-slate-400">Selected: {userTrainFile.name}</span>
+                      ) : null}
+                    </div>
+                    {userTrainError ? <p className="mt-3 text-sm text-rose-300">{userTrainError}</p> : null}
+                    {userTrainResult ? (
+                      <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-slate-950/80 p-4 text-left">
+                        <p className="text-sm font-semibold text-cyan-200">Retrain response</p>
+                        <pre className="mt-2 max-h-64 overflow-auto rounded-xl bg-slate-900/70 p-4 text-xs text-slate-100">
+{JSON.stringify(userTrainResult, null, 2)}
+                        </pre>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex flex-col items-center gap-4 text-cyan-300">
                     <ArrowDown />
                     <div className="w-full rounded-2xl border border-cyan-400/30 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6 text-center shadow-[0_0_40px_rgba(34,211,238,0.12)]">
                       <p className="text-sm uppercase tracking-[0.4em] text-cyan-400">Results and Graphs</p>
-                      <p className="mt-3 text-xl font-semibold text-white">Interactive ROC, PR, SHAP, and transit fits</p>
-                      <p className="mt-2 text-xs text-slate-400">Exportable as slides, CSVs, and WinnHacks report pack</p>
+                      <p className="mt-3 text-xl font-semibold text-white">
+                        {userTrainResult ? 'Review the metrics above to populate dashboards.' : 'Interactive ROC, PR, SHAP, and transit fits'}
+                      </p>
+                      <p className="mt-2 text-xs text-slate-400">
+                        {userTrainResult ? 'Use the response payload to drive custom visualizations.' : 'Exportable as slides, CSVs, and WinnHacks report pack'}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -671,6 +774,8 @@ function InputField({
   min,
   max,
   step,
+  value,
+  onChange,
 }: {
   label: string;
   helper?: string;
@@ -679,6 +784,8 @@ function InputField({
   min?: number;
   max?: number;
   step?: number;
+  value?: string;
+  onChange?: (value: string) => void;
 }) {
   return (
     <label className="block space-y-2 text-center text-sm">
@@ -689,6 +796,8 @@ function InputField({
         max={max}
         step={step}
         placeholder={placeholder}
+        value={value}
+        onChange={onChange ? (event) => onChange(event.target.value) : undefined}
         className="w-full rounded-xl border border-cyan-400/30 bg-slate-950/70 px-4 py-3 text-center text-sm text-white placeholder:text-slate-500 focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
       />
       {helper ? <span className="block text-xs text-slate-400">{helper}</span> : null}
