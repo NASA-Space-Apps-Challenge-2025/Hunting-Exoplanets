@@ -210,7 +210,7 @@ class ModelManager:
                 'Accept': 'text/csv,application/csv'
             }
 
-            response = requests.get(tap_url, params=params, headers=headers, timeout=30)
+            response = requests.get(tap_url, params=params, headers=headers, timeout=90)
 
             if response.status_code == 200:
                 df = pd.read_csv(StringIO(response.text))
@@ -240,6 +240,14 @@ class ModelManager:
         Returns:
             Dictionary containing metrics and comparison data
         """
+        # Check minimum data requirements
+        MIN_TRAINING_SAMPLES = 20
+        if len(data) < MIN_TRAINING_SAMPLES:
+            raise ValueError(
+                f"Insufficient training data: {len(data)} rows provided, "
+                f"but at least {MIN_TRAINING_SAMPLES} rows are required for reliable training."
+            )
+        
         # Validate features
         is_valid, missing = self.validate_features(data)
         if not is_valid:
@@ -289,9 +297,21 @@ class ModelManager:
 
         # Split for validation
         from sklearn.model_selection import train_test_split
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
-        )
+        
+        # Check if we have enough samples for stratification
+        # We need at least 2 samples per class for stratification
+        min_class_count = y.value_counts().min()
+        use_stratify = min_class_count >= 2 and len(y) >= 10
+        
+        if use_stratify:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=0.2, random_state=42, stratify=y
+            )
+        else:
+            print(f"   ⚠️  Warning: Dataset too small for stratification (min class count: {min_class_count}), using random split", flush=True)
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=0.2, random_state=42
+            )
 
         new_model.fit(X_train, y_train, X_val, y_val)
 
@@ -511,11 +531,14 @@ class ModelManager:
         else:
             cm_list = cm
 
+        # Handle F1 score - YDF uses 'f1' key, but saved metrics use 'f1_score'
+        f1_value = metrics.get('f1_score', metrics.get('f1', 0.0))
+
         return {
             "accuracy": float(metrics.get('accuracy', 0.0)),
             "precision": float(metrics.get('precision', 0.0)),
             "recall": float(metrics.get('recall', 0.0)),
-            "f1_score": float(metrics.get('f1', 0.0)),
+            "f1_score": float(f1_value),
             "confusion_matrix": cm_list,
             "roc_auc": float(metrics.get('roc_auc', 0.0))
         }
