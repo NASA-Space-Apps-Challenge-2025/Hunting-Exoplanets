@@ -206,6 +206,11 @@ class ModelManager:
 
             if response.status_code == 200:
                 df = pd.read_csv(StringIO(response.text))
+
+                # Print data info
+                print(f"   ✓ Fetched {len(df)} rows and {len(df.columns)} columns", flush=True)
+                print(f"   ✓ Columns: {list(df.columns)[:10]}..." if len(df.columns) > 10 else f"   ✓ Columns: {list(df.columns)}", flush=True)
+
                 return df
             else:
                 print(f"Failed to fetch data from API. Status code: {response.status_code}")
@@ -236,23 +241,35 @@ class ModelManager:
         # Assume target is in a column named 'koi_disposition' or 'target'
         if 'target' in data.columns:
             y = data['target']
-            X = data[self.REQUIRED_FEATURES]
+            # Select features in the correct order
+            X = data[self.REQUIRED_FEATURES].copy()
         elif 'koi_disposition' in data.columns:
             # Convert to binary: CONFIRMED -> 1, FALSE POSITIVE -> 0
             y = (data['koi_disposition'] == 'CONFIRMED').astype(int)
-            X = data[self.REQUIRED_FEATURES]
+            # Select features in the correct order
+            X = data[self.REQUIRED_FEATURES].copy()
         else:
             raise ValueError("Data must contain 'target' or 'koi_disposition' column")
 
-        # Map hyperparameters to YDF ensemble parameters
-        # The API accepts: learning_rate, max_depth, num_trees, use_hessian_gain
-        # Map to GBT parameters in YDF ensemble
-        ensemble_params = {
-            'gbt_shrinkage': hyperparams.get('learning_rate', 0.03),
-            'gbt_max_depth': hyperparams.get('max_depth', 8),
-            'gbt_num_trees': hyperparams.get('num_trees', 700),
-            'verbose': False
-        }
+        # Ensure columns are in the correct order (pandas will reorder automatically)
+        # This is important for model consistency
+        X = X[self.REQUIRED_FEATURES]
+
+        # Map user-provided hyperparameters to YDF ensemble parameters
+        # Only expose: learning_rate, max_depth, num_trees
+        # Use optimal hyperparameters from config for all others
+        ensemble_params = self.optimal_hyperparameters.copy()
+
+        # Override only the user-provided hyperparameters
+        if 'learning_rate' in hyperparams:
+            ensemble_params['gbt_shrinkage'] = hyperparams['learning_rate']
+        if 'max_depth' in hyperparams:
+            ensemble_params['gbt_max_depth'] = hyperparams['max_depth']
+        if 'num_trees' in hyperparams:
+            ensemble_params['gbt_num_trees'] = hyperparams['num_trees']
+
+        # Always suppress verbose output
+        ensemble_params['verbose'] = False
 
         # Create and train new model
         new_model = HonestYDFEnsemble(**ensemble_params)
@@ -321,8 +338,10 @@ class ModelManager:
         else:
             raise ValueError("No model available. Train a base model first.")
 
-        # Make predictions
-        X = data[self.REQUIRED_FEATURES]
+        # Make predictions - ensure columns are in correct order
+        X = data[self.REQUIRED_FEATURES].copy()
+        X = X[self.REQUIRED_FEATURES]  # Reorder columns to match training order
+
         inference_result = model.infer(X, return_proba=True, return_details=False)
 
         # Return predictions as list

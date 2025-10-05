@@ -10,10 +10,9 @@ from model_manager import ModelManager
 
 
 class HyperParameters(BaseModel):
-    learning_rate: float = Field(0.01, description="Learning rate for the model")
-    max_depth: int = Field(5, description="Maximum depth of trees")
-    num_trees: int = Field(100, description="Number of trees")
-    use_hessian_gain: bool = Field(False, description="Whether to use Hessian gain")
+    learning_rate: float = Field(0.03, description="Learning rate for gradient boosting (default: 0.03)")
+    max_depth: int = Field(8, description="Maximum depth of gradient boosted trees (default: 8)")
+    num_trees: int = Field(700, description="Number of gradient boosted trees (default: 700)")
 
 
 class HealthResponse(BaseModel):
@@ -96,9 +95,6 @@ model_manager = ModelManager()
 # Load or train base model before starting server
 def initialize_model():
     """Initialize base model - load from disk or train new one"""
-    import sys
-    from pathlib import Path
-
     model_path = model_manager.BASE_MODEL_DIR / "model.pkl"
 
     if model_path.exists():
@@ -152,14 +148,24 @@ def initialize_model():
             print("💾 Saving base model to disk...")
             model_manager.save_base_model()
 
-            # Get metrics
-            metrics = model_manager._format_metrics(model_manager.base_model_metrics or {})
+            # Get training and validation metrics
+            train_metrics = model_manager._format_metrics(model_manager.base_model.metrics.get('train', {}))
+            val_metrics = model_manager._format_metrics(model_manager.base_model_metrics or {})
+
             print("\n📊 Base Model Performance:", flush=True)
-            print(f"   Accuracy:  {metrics['accuracy']:.4f} ({metrics['accuracy']*100:.2f}%)", flush=True)
-            print(f"   Precision: {metrics['precision']:.4f}", flush=True)
-            print(f"   Recall:    {metrics['recall']:.4f}", flush=True)
-            print(f"   F1-Score:  {metrics['f1_score']:.4f}", flush=True)
-            print(f"   ROC-AUC:   {metrics['roc_auc']:.4f}", flush=True)
+            print("\n   Training Set:", flush=True)
+            print(f"      Accuracy:  {train_metrics['accuracy']:.4f} ({train_metrics['accuracy']*100:.2f}%)", flush=True)
+            print(f"      Precision: {train_metrics['precision']:.4f}", flush=True)
+            print(f"      Recall:    {train_metrics['recall']:.4f}", flush=True)
+            print(f"      F1-Score:  {train_metrics['f1_score']:.4f}", flush=True)
+            print(f"      ROC-AUC:   {train_metrics['roc_auc']:.4f}", flush=True)
+
+            print("\n   Validation Set:", flush=True)
+            print(f"      Accuracy:  {val_metrics['accuracy']:.4f} ({val_metrics['accuracy']*100:.2f}%)", flush=True)
+            print(f"      Precision: {val_metrics['precision']:.4f}", flush=True)
+            print(f"      Recall:    {val_metrics['recall']:.4f}", flush=True)
+            print(f"      F1-Score:  {val_metrics['f1_score']:.4f}", flush=True)
+            print(f"      ROC-AUC:   {val_metrics['roc_auc']:.4f}", flush=True)
 
             print("\n✅ Base model trained and saved successfully", flush=True)
             return True
@@ -259,20 +265,18 @@ async def inference(
 )
 async def retrain(
     file: UploadFile = File(..., description="CSV file with new training data"),
-    learning_rate: Optional[float] = Form(0.01, description="Learning rate for gradient boosting (default: 0.01)"),
-    max_depth: Optional[int] = Form(5, description="Maximum depth of decision trees (default: 5)"),
-    num_trees: Optional[int] = Form(100, description="Number of trees in the ensemble (default: 100)"),
-    use_hessian_gain: Optional[bool] = Form(False, description="Use Hessian-based gain calculation (default: False)")
+    learning_rate: Optional[float] = Form(0.03, description="Learning rate for gradient boosting (default: 0.03)"),
+    max_depth: Optional[int] = Form(8, description="Maximum depth of gradient boosted trees (default: 8)"),
+    num_trees: Optional[int] = Form(700, description="Number of gradient boosted trees (default: 700)")
 ):
     """
     Retrain the model with new data
 
     Args:
         file: CSV file with new training data
-        learning_rate: Learning rate for the model (default: 0.01)
-        max_depth: Maximum depth of trees (default: 5)
-        num_trees: Number of trees (default: 100)
-        use_hessian_gain: Whether to use Hessian gain (default: False)
+        learning_rate: Learning rate for gradient boosting (default: 0.03)
+        max_depth: Maximum depth of gradient boosted trees (default: 8)
+        num_trees: Number of gradient boosted trees (default: 700)
 
     Returns:
         Session ID, model metrics, and comparison with base model
@@ -293,24 +297,27 @@ async def retrain(
                 detail=f"Missing required features: {missing}. Required features: {model_manager.REQUIRED_FEATURES}"
             )
 
-        # Prepare hyperparameters
+        # Prepare hyperparameters (only user-configurable ones)
         hyperparams = {
             "learning_rate": learning_rate,
             "max_depth": max_depth,
-            "num_trees": num_trees,
-            "use_hessian_gain": use_hessian_gain
+            "num_trees": num_trees
         }
 
         # Generate session ID
         session_id = str(uuid.uuid4())
 
         # Fetch existing training data from API
+        print(f"📥 Fetching existing data from NASA Exoplanet Archive for session {session_id}...", flush=True)
         existing_data = model_manager.fetch_existing_data()
 
         # Combine existing and new data
         if existing_data is not None:
+            print(f"   ✓ Combining {len(existing_data)} existing rows with {len(new_data)} new rows", flush=True)
             combined_data = pd.concat([existing_data, new_data], ignore_index=True)
+            print(f"   ✓ Total training data: {len(combined_data)} rows, {len(combined_data.columns)} columns", flush=True)
         else:
+            print(f"   ⚠️  No existing data fetched, using only new data ({len(new_data)} rows)", flush=True)
             combined_data = new_data
 
         # Train new model and get metrics

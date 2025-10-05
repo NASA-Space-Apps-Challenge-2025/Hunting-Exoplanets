@@ -85,6 +85,12 @@ Retrain the model with new data. Fetches existing data from API, combines it wit
 
 **Request:**
 - Body: CSV file with new training data (multipart/form-data)
+- Form parameters (optional):
+  - `learning_rate` (float, default: 0.03): Learning rate for gradient boosting
+  - `max_depth` (int, default: 8): Maximum depth of gradient boosted trees
+  - `num_trees` (int, default: 700): Number of gradient boosted trees
+
+**Note:** All other hyperparameters (Random Forest, Extra Trees, Meta-learner) use optimal values from config.
 
 **Response:**
 ```json
@@ -121,8 +127,16 @@ Retrain the model with new data. Fetches existing data from API, combines it wit
 
 **Example:**
 ```bash
+# With default hyperparameters
 curl -X POST "http://localhost:8000/retrain" \
   -F "file=@new_training_data.csv"
+
+# With custom hyperparameters
+curl -X POST "http://localhost:8000/retrain" \
+  -F "file=@new_training_data.csv" \
+  -F "learning_rate=0.05" \
+  -F "max_depth=10" \
+  -F "num_trees=500"
 ```
 
 ---
