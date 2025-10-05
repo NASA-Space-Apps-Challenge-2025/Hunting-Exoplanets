@@ -196,18 +196,34 @@ def initialize_model():
             traceback.print_exc()
             return False
 
-# Initialize model before starting server
-print("=" * 80)
-print("🚀 EXOPLANET ML MODEL API - INITIALIZATION")
-print("=" * 80)
+# Initialize model before starting server (only if not on Vercel)
+import os
+IS_VERCEL = os.getenv("VERCEL") == "1"
 
-if not initialize_model():
-    print("\n⚠️  Warning: Server starting without a base model")
-    print("   API endpoints will not work until a model is trained")
+if not IS_VERCEL:
+    print("=" * 80)
+    print("🚀 EXOPLANET ML MODEL API - INITIALIZATION")
+    print("=" * 80)
 
-print("\n" + "=" * 80)
-print("🌟 Starting FastAPI server...")
-print("=" * 80)
+    if not initialize_model():
+        print("\n⚠️  Warning: Server starting without a base model")
+        print("   API endpoints will not work until a model is trained")
+
+    print("\n" + "=" * 80)
+    print("🌟 Starting FastAPI server...")
+    print("=" * 80)
+else:
+    # On Vercel, try to load existing model but don't train
+    print("🌐 Running on Vercel - attempting to load pre-trained model...")
+    model_path = model_manager.BASE_MODEL_DIR / "model.pkl"
+    if model_path.exists():
+        try:
+            model_manager.load_base_model()
+            print("✅ Pre-trained model loaded successfully")
+        except Exception as e:
+            print(f"⚠️  Could not load model: {e}")
+    else:
+        print("⚠️  No pre-trained model found. Please train locally and commit model files.")
 
 
 @app.get(
