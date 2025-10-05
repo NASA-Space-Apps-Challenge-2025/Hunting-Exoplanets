@@ -135,7 +135,21 @@ def initialize_model():
                 return False
 
             # Prepare data
-            y = (training_data['koi_disposition'] == 'CONFIRMED').astype(int)
+            # Convert to binary: CONFIRMED + CANDIDATE -> 1, FALSE POSITIVE -> 0
+            # This follows the binary classification strategy documented in models/README.md
+            y = training_data['koi_disposition'].map({
+                'CONFIRMED': 1,
+                'CANDIDATE': 1,
+                'FALSE POSITIVE': 0
+            })
+            
+            # Remove rows with missing target (if any unmapped values)
+            valid_idx = y.notna()
+            if not valid_idx.all():
+                print(f"   ⚠️  Removing {(~valid_idx).sum()} rows with unknown disposition")
+                training_data = training_data[valid_idx]
+                y = y[valid_idx]
+            
             X = training_data[model_manager.REQUIRED_FEATURES]
 
             # Check for missing features
@@ -445,6 +459,75 @@ async def graph(identifier: str = Query(..., description="Session ID from the re
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch graph data: {str(e)}")
+
+
+@app.get(
+    "/loss-comparison",
+    summary="[TEMPORARY] Compare Training vs Validation Loss",
+    description="Temporary endpoint to compare training and validation loss/metrics. Used for debugging overfitting/underfitting."
+)
+async def loss_comparison(session: Optional[str] = Query(None, description="Optional session ID to compare a retrained model")):
+    """
+    TEMPORARY: Compare training vs validation metrics to detect overfitting
+    
+    Args:
+        session: Optional session ID to compare a retrained model (if None, uses base model)
+    
+    Returns:
+        Dictionary with training and validation metrics comparison
+    """
+    try:
+        # Determine which model to analyze
+        if session:
+            if not model_manager.session_exists(session):
+                raise HTTPException(status_code=404, detail=f"Session {session} not found")
+            
+            model = model_manager.trained_models.get(session)
+            model_name = f"Session {session}"
+        else:
+            model = model_manager.base_model
+            model_name = "Base Model"
+        
+        if not model:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Model not found. {'Session does not have a trained model' if session else 'Base model not initialized'}"
+            )
+        
+        # Extract training and validation metrics from the model
+        train_metrics = model_manager._format_metrics(model.metrics.get('train', {}))
+        val_metrics = model_manager._format_metrics(model.metrics.get('validation', {}))
+        
+        # Calculate the differences (loss gap indicators)
+        loss_gap = {
+            "accuracy_gap": train_metrics['accuracy'] - val_metrics['accuracy'],
+            "precision_gap": train_metrics['precision'] - val_metrics['precision'],
+            "recall_gap": train_metrics['recall'] - val_metrics['recall'],
+            "f1_gap": train_metrics['f1_score'] - val_metrics['f1_score'],
+            "roc_auc_gap": train_metrics['roc_auc'] - val_metrics['roc_auc']
+        }
+        
+        # Determine if overfitting is occurring
+        # Generally, if training accuracy is significantly higher than validation accuracy, it suggests overfitting
+        is_overfitting = loss_gap['accuracy_gap'] > 0.05  # 5% threshold
+        
+        return {
+            "model": model_name,
+            "training_metrics": train_metrics,
+            "validation_metrics": val_metrics,
+            "loss_gap": loss_gap,
+            "overfitting_detected": is_overfitting,
+            "interpretation": {
+                "overfitting_risk": "HIGH" if loss_gap['accuracy_gap'] > 0.1 else "MEDIUM" if loss_gap['accuracy_gap'] > 0.05 else "LOW",
+                "notes": "Large gap between training and validation metrics suggests overfitting. Consider regularization or more data."
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to compare loss metrics: {str(e)}")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,13 @@ import numpy as np
 import pickle
 import json
 import os
+import sys
 from pathlib import Path
+
+# Add models directory to path to import ydf_ensemble
+MODELS_DIR = Path(__file__).parent.parent / "models"
+sys.path.insert(0, str(MODELS_DIR))
+
 from ydf_ensemble import HonestYDFEnsemble
 
 
@@ -46,21 +52,23 @@ class ModelManager:
         except Exception as e:
             print(f"Error loading config: {e}")
 
-        # Return default hyperparameters from ydf_ensemble
+        # Return default hyperparameters from ydf_ensemble.py in models folder
+        # These are the optimized parameters from Optuna tuning
         return {
             "rf_num_trees": 800,
             "rf_max_depth": 50,
             "rf_min_examples": 5,
             "gbt_num_trees": 700,
             "gbt_max_depth": 8,
-            "gbt_shrinkage": 0.03,
+            "gbt_shrinkage": 0.03,  # learning_rate
             "gbt_subsample": 0.70,
             "gbt_early_stopping": 40,
             "et_num_trees": 300,
             "et_candidate_ratio": 0.40,
             "meta_C": 0.05,
             "meta_max_iter": 2000,
-            "random_seed": 42
+            "random_seed": 42,
+            "verbose": True
         }
 
     def set_data_api_url(self, url: str):
@@ -252,8 +260,13 @@ class ModelManager:
             # Select features in the correct order
             X = data[self.REQUIRED_FEATURES].copy()
         elif 'koi_disposition' in data.columns:
-            # Convert to binary: CONFIRMED -> 1, FALSE POSITIVE -> 0
-            y = (data['koi_disposition'] == 'CONFIRMED').astype(int)
+            # Convert to binary: CONFIRMED + CANDIDATE -> 1, FALSE POSITIVE -> 0
+            # This follows the binary classification strategy documented in models/README.md
+            y = data['koi_disposition'].map({
+                'CONFIRMED': 1,
+                'CANDIDATE': 1,
+                'FALSE POSITIVE': 0
+            })
             # Select features in the correct order
             X = data[self.REQUIRED_FEATURES].copy()
         else:
