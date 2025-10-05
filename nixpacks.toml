@@ -1,11 +1,11 @@
-[start]
-cmd = ["sh", "-c", "python3 -m uvicorn backend.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+[variables]
+PYTHONUNBUFFERED = "1"
 
 [phases.setup]
-nixPkgs = ["python311", "gcc", "gfortran"]
+nixPkgs = ["python311"]
 
 [phases.install]
-cmds = [
-  "pip3 install --upgrade pip",
-  "pip3 install -r requirements.txt"
-]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "python3 -m uvicorn backend.app:app --host 0.0.0.0 --port $PORT"
