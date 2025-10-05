@@ -1,27 +1,17 @@
 """
-Optimized Single GBT Model for Exoplanet Detection
-===================================================
+YDF Stacking Ensemble for Exoplanet Detection
+==============================================
 
-An honest machine learning model for exoplanet detection using a single optimized
-YDF Gradient Boosted Trees model. This model uses 13 curated physical features 
-without data leakage.
+An honest machine learning model for exoplanet detection using YDF (Yggdrasil Decision Forests)
+stacking ensemble. This model uses 13 curated physical features without data leakage.
 
 Features:
-- Single Gradient Boosted Trees model (simplified architecture)
-- Hyperparameters optimized via Optuna (837 trials)
-- Best validation accuracy: 84.84%
-- No ensemble overhead - faster training and inference
+- Random Forest base model
+- Gradient Boosted Trees base model  
+- Extra Trees base model
+- Logistic Regression meta-learner
+- Optimized hyperparameters from Optuna
 - No data leakage (excludes koi_pdisposition and koi_score)
-
-Performance:
-- Test Accuracy: 83.69%
-- ROC-AUC: 0.9227
-- Recall: 83.92% (planet detection rate)
-
-Architecture Change (October 2025):
-- Replaced 3-model stacking ensemble with single optimized GBT
-- Rationale: Simpler architecture, easier maintenance, same/better performance
-- Optuna optimization: Trial #133 out of 837 trials
 
 Author: brix for the NASA Space Apps Challenge 2025
 Date: October 2025
@@ -42,40 +32,43 @@ warnings.filterwarnings('ignore')
 
 class HonestYDFEnsemble:
     """
-    Optimized Single GBT Model for Exoplanet Detection
+    Honest YDF Stacking Ensemble for Exoplanet Detection
     
-    This model uses a single optimized Gradient Boosted Trees model with hyperparameters
-    found through extensive Optuna optimization (837 trials). The simplified architecture
-    provides better maintainability and comparable performance to complex ensembles.
+    This ensemble combines three YDF base models (Random Forest, Gradient Boosted Trees, 
+    Extra Trees) with a Logistic Regression meta-learner to predict exoplanet candidates.
     
     Key Features:
-    - Single GBT model (no ensemble complexity)
-    - Hyperparameters optimized via Optuna (Trial #133, validation accuracy: 84.84%)
     - Uses 13 curated physical features (no data leakage)
-    - Fast training (~2 seconds) and inference
+    - Optimized hyperparameters from Optuna tuning
+    - Configurable parameters for fine-tuning
     - Comprehensive performance metrics
-    
-    Optimized Parameters (from Optuna Trial #133):
-    - num_trees: 1100
-    - max_depth: 6 (shallower trees prevent overfitting)
-    - shrinkage: 0.0071 (very low learning rate for better generalization)
-    - subsample: 0.731 (strong regularization)
-    - min_examples: 4
     
     Parameters
     ----------
-    gbt_num_trees : int, default=1100
+    rf_num_trees : int, default=800
+        Number of trees in Random Forest
+    rf_max_depth : int, default=50
+        Maximum depth of Random Forest trees
+    rf_min_examples : int, default=5
+        Minimum examples per leaf in Random Forest
+    gbt_num_trees : int, default=700
         Number of trees in Gradient Boosted Trees
-    gbt_max_depth : int, default=6
+    gbt_max_depth : int, default=8
         Maximum depth of GBT trees
-    gbt_shrinkage : float, default=0.007094
-        Learning rate (shrinkage) for GBT - very low for stability
-    gbt_subsample : float, default=0.7315
+    gbt_shrinkage : float, default=0.03
+        Learning rate (shrinkage) for GBT
+    gbt_subsample : float, default=0.70
         Subsample ratio for GBT
-    gbt_min_examples : int, default=4
-        Minimum examples per leaf
-    gbt_early_stopping : int, default=60
+    gbt_early_stopping : int, default=40
         Early stopping rounds for GBT
+    et_num_trees : int, default=300
+        Number of trees in Extra Trees
+    et_candidate_ratio : float, default=0.40
+        Candidate attributes ratio for Extra Trees
+    meta_C : float, default=0.05
+        Regularization parameter for meta-learner
+    meta_max_iter : int, default=2000
+        Maximum iterations for meta-learner
     random_seed : int, default=42
         Random seed for reproducibility
     verbose : bool, default=True
@@ -84,32 +77,51 @@ class HonestYDFEnsemble:
     
     def __init__(
         self,
-        # Gradient Boosted Trees parameters (Optuna-optimized)
-        gbt_num_trees: int = 1100,
-        gbt_max_depth: int = 6,
-        gbt_shrinkage: float = 0.007094192442381623,
-        gbt_subsample: float = 0.7314794732228673,
-        gbt_min_examples: int = 4,
-        gbt_early_stopping: int = 60,
+        # Random Forest parameters
+        rf_num_trees: int = 800,
+        rf_max_depth: int = 50,
+        rf_min_examples: int = 5,
+        # Gradient Boosted Trees parameters
+        gbt_num_trees: int = 700,
+        gbt_max_depth: int = 8,
+        gbt_shrinkage: float = 0.03,  # learning_rate
+        gbt_subsample: float = 0.70,
+        gbt_early_stopping: int = 40,
+        # Extra Trees parameters
+        et_num_trees: int = 300,
+        et_candidate_ratio: float = 0.40,
+        # Meta-learner parameters
+        meta_C: float = 0.05,
+        meta_max_iter: int = 2000,
         # General parameters
         random_seed: int = 42,
         verbose: bool = True
     ):
-        """Initialize the Optimized Single GBT Model"""
+        """Initialize the Honest YDF Ensemble"""
         
-        # Store GBT parameters (Optuna-optimized)
+        # Store parameters
+        self.rf_num_trees = rf_num_trees
+        self.rf_max_depth = rf_max_depth
+        self.rf_min_examples = rf_min_examples
+        
         self.gbt_num_trees = gbt_num_trees
         self.gbt_max_depth = gbt_max_depth
         self.gbt_shrinkage = gbt_shrinkage
         self.gbt_subsample = gbt_subsample
-        self.gbt_min_examples = gbt_min_examples
         self.gbt_early_stopping = gbt_early_stopping
+        
+        self.et_num_trees = et_num_trees
+        self.et_candidate_ratio = et_candidate_ratio
+        
+        self.meta_C = meta_C
+        self.meta_max_iter = meta_max_iter
         
         self.random_seed = random_seed
         self.verbose = verbose
         
         # Model components (initialized during fit)
-        self.model = None
+        self.base_models = []
+        self.meta_learner = None
         self.imputer = None
         self.feature_names = None
         
@@ -153,7 +165,7 @@ class HonestYDFEnsemble:
         y_val: Optional[pd.Series] = None
     ) -> 'HonestYDFEnsemble':
         """
-        Fit the optimized single GBT model
+        Fit the YDF stacking ensemble
         
         Parameters
         ----------
@@ -169,12 +181,12 @@ class HonestYDFEnsemble:
         Returns
         -------
         self : HonestYDFEnsemble
-            Fitted model
+            Fitted ensemble
         """
         start_time = time.time()
         
         self._log("=" * 90)
-        self._log("TRAINING OPTIMIZED SINGLE GBT MODEL")
+        self._log("TRAINING HONEST YDF STACKING ENSEMBLE")
         self._log("=" * 90)
         
         # Prepare data
@@ -198,36 +210,92 @@ class HonestYDFEnsemble:
                   f"{(y == 0).sum()} false positives ({(y == 0).sum() / len(y) * 100:.1f}%)")
         
         # Convert target to string for YDF
-        y_str = y.reset_index(drop=True).astype(str)
+        y_str = y.astype(str)
         
         # Create training dataframe with target
         train_df = X_imputed.copy()
         train_df['target'] = y_str.values
         
-        # Train single GBT model
-        self._log("\n🌲 TRAINING GRADIENT BOOSTED TREES MODEL")
+        # Train base models
+        self._log("\n🌲 TRAINING BASE MODELS")
         self._log("=" * 90)
-        self._log(f"   Parameters (Optuna-optimized, Trial #133):")
-        self._log(f"      num_trees: {self.gbt_num_trees}")
-        self._log(f"      max_depth: {self.gbt_max_depth}")
-        self._log(f"      shrinkage: {self.gbt_shrinkage:.6f}")
-        self._log(f"      subsample: {self.gbt_subsample:.4f}")
-        self._log(f"      min_examples: {self.gbt_min_examples}")
-        self._log(f"      early_stopping: {self.gbt_early_stopping}")
         
-        model_start = time.time()
-        self.model = ydf.GradientBoostedTreesLearner(
+        # 1. Random Forest
+        self._log(f"\n1. Training Random Forest...")
+        self._log(f"   Parameters: num_trees={self.rf_num_trees}, max_depth={self.rf_max_depth}, "
+                  f"min_examples={self.rf_min_examples}")
+        rf_start = time.time()
+        rf_model = ydf.RandomForestLearner(
+            label='target',
+            num_trees=self.rf_num_trees,
+            max_depth=self.rf_max_depth,
+            min_examples=self.rf_min_examples,
+            random_seed=self.random_seed
+        ).train(train_df)
+        rf_time = time.time() - rf_start
+        self.base_models.append(rf_model)
+        self._log(f"   ✅ Completed in {rf_time:.2f}s")
+        
+        # 2. Gradient Boosted Trees
+        self._log(f"\n2. Training Gradient Boosted Trees...")
+        self._log(f"   Parameters: num_trees={self.gbt_num_trees}, max_depth={self.gbt_max_depth}, "
+                  f"subsample={self.gbt_subsample:.2f}")
+        self._log(f"               shrinkage={self.gbt_shrinkage:.4f}, early_stopping={self.gbt_early_stopping}")
+        gbt_start = time.time()
+        gbt_model = ydf.GradientBoostedTreesLearner(
             label='target',
             num_trees=self.gbt_num_trees,
             max_depth=self.gbt_max_depth,
             subsample=self.gbt_subsample,
             shrinkage=self.gbt_shrinkage,
-            min_examples=self.gbt_min_examples,
             early_stopping_num_trees_look_ahead=self.gbt_early_stopping,
             random_seed=self.random_seed
         ).train(train_df)
-        model_time = time.time() - model_start
-        self._log(f"   ✅ Training completed in {model_time:.2f}s")
+        gbt_time = time.time() - gbt_start
+        self.base_models.append(gbt_model)
+        self._log(f"   ✅ Completed in {gbt_time:.2f}s")
+        
+        # 3. Extra Trees
+        self._log(f"\n3. Training Extra Trees...")
+        self._log(f"   Parameters: num_trees={self.et_num_trees}, "
+                  f"candidate_ratio={self.et_candidate_ratio:.2f}")
+        et_start = time.time()
+        et_model = ydf.RandomForestLearner(
+            label='target',
+            num_trees=self.et_num_trees,
+            winner_take_all=True,
+            num_candidate_attributes_ratio=self.et_candidate_ratio,
+            random_seed=self.random_seed
+        ).train(train_df)
+        et_time = time.time() - et_start
+        self.base_models.append(et_model)
+        self._log(f"   ✅ Completed in {et_time:.2f}s")
+        
+        total_base_time = rf_time + gbt_time + et_time
+        self._log(f"\n  Total base model training time: {total_base_time:.2f}s")
+        
+        # Create meta-features
+        self._log(f"\n🎯 CREATING META-FEATURES")
+        self._log("-" * 90)
+        
+        meta_X_train = self._create_meta_features(X_imputed)
+        self._log(f"  Meta-features shape: {meta_X_train.shape}")
+        
+        # Train meta-learner
+        self._log(f"\n🧠 TRAINING META-LEARNER (Logistic Regression)")
+        self._log("-" * 90)
+        self._log(f"   Parameters: C={self.meta_C:.4f}, max_iter={self.meta_max_iter}")
+        
+        self.meta_learner = LogisticRegression(
+            C=self.meta_C,
+            max_iter=self.meta_max_iter,
+            random_state=self.random_seed,
+            solver='lbfgs'
+        )
+        self.meta_learner.fit(meta_X_train, y)
+        self._log(f"  ✅ Meta-learner trained")
+        self._log(f"  Coefficients: {self.meta_learner.coef_[0]}")
+        self._log(f"  Intercept: {self.meta_learner.intercept_[0]:.4f}")
         
         self.training_time = time.time() - start_time
         
@@ -259,6 +327,17 @@ class HonestYDFEnsemble:
         
         return self
     
+    def _create_meta_features(self, X: pd.DataFrame) -> np.ndarray:
+        """Create meta-features from base model predictions"""
+        meta_features = []
+        
+        for model in self.base_models:
+            predictions = model.predict(X)
+            predictions_array = np.array(predictions).astype(float).reshape(-1, 1)
+            meta_features.append(predictions_array)
+        
+        return np.hstack(meta_features)
+    
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         """
         Predict class labels
@@ -273,7 +352,7 @@ class HonestYDFEnsemble:
         predictions : np.ndarray
             Predicted class labels (0 or 1)
         """
-        if self.model is None:
+        if self.meta_learner is None:
             raise ValueError("Model must be fitted before making predictions")
         
         X_prep = self._prepare_data(X)
@@ -283,10 +362,8 @@ class HonestYDFEnsemble:
             index=X_prep.index
         )
         
-        # YDF returns probabilities for binary classification
-        y_pred_proba = self.model.predict(X_imputed)
-        # Convert to class labels
-        return (y_pred_proba > 0.5).astype(int)
+        meta_features = self._create_meta_features(X_imputed)
+        return self.meta_learner.predict(meta_features)
     
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """
@@ -302,7 +379,7 @@ class HonestYDFEnsemble:
         probabilities : np.ndarray
             Predicted class probabilities, shape (n_samples, 2)
         """
-        if self.model is None:
+        if self.meta_learner is None:
             raise ValueError("Model must be fitted before making predictions")
         
         X_prep = self._prepare_data(X)
@@ -312,11 +389,8 @@ class HonestYDFEnsemble:
             index=X_prep.index
         )
         
-        # YDF returns probability for class 1
-        y_pred_proba_1 = self.model.predict(X_imputed).astype(float)
-        # Create 2-column probability array
-        y_pred_proba_0 = 1 - y_pred_proba_1
-        return np.column_stack([y_pred_proba_0, y_pred_proba_1])
+        meta_features = self._create_meta_features(X_imputed)
+        return self.meta_learner.predict_proba(meta_features)
     
     def evaluate(
         self, 
@@ -386,12 +460,18 @@ class HonestYDFEnsemble:
     def get_params(self) -> Dict[str, Any]:
         """Get model parameters"""
         return {
+            'rf_num_trees': self.rf_num_trees,
+            'rf_max_depth': self.rf_max_depth,
+            'rf_min_examples': self.rf_min_examples,
             'gbt_num_trees': self.gbt_num_trees,
             'gbt_max_depth': self.gbt_max_depth,
             'gbt_shrinkage': self.gbt_shrinkage,
             'gbt_subsample': self.gbt_subsample,
             'gbt_early_stopping': self.gbt_early_stopping,
-            'gbt_min_examples': self.gbt_min_examples,
+            'et_num_trees': self.et_num_trees,
+            'et_candidate_ratio': self.et_candidate_ratio,
+            'meta_C': self.meta_C,
+            'meta_max_iter': self.meta_max_iter,
             'random_seed': self.random_seed
         }
     
@@ -420,7 +500,7 @@ class HonestYDFEnsemble:
             Whether to return class probabilities
             
         return_details : bool, default=False
-            Whether to return additional details (confidence scores)
+            Whether to return additional details (base model predictions, confidence)
             
         Returns
         -------
@@ -432,6 +512,8 @@ class HonestYDFEnsemble:
                 Probabilities for each class [prob_fp, prob_planet]
             - 'confidence': np.ndarray (if return_details=True)
                 Confidence scores (max probability)
+            - 'base_predictions': dict (if return_details=True)
+                Individual predictions from base models
             - 'n_samples': int
                 Number of samples processed
             
@@ -442,9 +524,10 @@ class HonestYDFEnsemble:
         >>> predictions = results['predictions']
         >>> probabilities = results['probabilities']
         
-        >>> # Detailed inference with confidence scores
+        >>> # Detailed inference with base model predictions
         >>> results = ensemble.infer(X_new, return_details=True)
         >>> confidence = results['confidence']
+        >>> base_preds = results['base_predictions']
         
         >>> # Print results for each sample
         >>> for i in range(len(predictions)):
@@ -452,7 +535,7 @@ class HonestYDFEnsemble:
         ...         print(f"Sample {i}: PLANET (confidence: {confidence[i]:.2%})")
         """
         
-        if self.model is None:
+        if self.meta_learner is None:
             raise ValueError("Model must be fitted before making predictions. Call fit() first.")
         
         # Validate required features
@@ -484,8 +567,31 @@ class HonestYDFEnsemble:
         # Add detailed information if requested
         if return_details:
             # Get base model predictions
-            # For single model, just add confidence scores
-            results['confidence'] = np.max(probabilities, axis=1)
+            X_prep = self._prepare_data(X)
+            X_imputed = pd.DataFrame(
+                self.imputer.transform(X_prep),
+                columns=X_prep.columns,
+                index=X_prep.index
+            )
+            
+            base_predictions = {}
+            base_probabilities = {}
+            
+            model_names = ['random_forest', 'gradient_boosted_trees', 'extra_trees']
+            for i, (model, name) in enumerate(zip(self.base_models, model_names)):
+                # Get predictions
+                preds = model.predict(X_imputed)
+                base_predictions[name] = np.array(preds).astype(float)
+                
+                # Note: YDF models return predictions as strings, convert to float
+                # 1.0 = Planet, 0.0 = False Positive
+            
+            results['base_predictions'] = base_predictions
+            
+            # Add prediction agreement score
+            base_pred_array = np.array(list(base_predictions.values())).T
+            agreement = np.mean(base_pred_array == predictions.reshape(-1, 1), axis=1)
+            results['agreement_score'] = agreement
         
         return results
     
@@ -541,7 +647,7 @@ class HonestYDFEnsemble:
         koi_teq : float
             Equilibrium temperature (Kelvin)
         return_details : bool, default=True
-            Whether to return detailed prediction information (confidence scores)
+            Whether to return detailed prediction information
             
         Returns
         -------
@@ -553,8 +659,12 @@ class HonestYDFEnsemble:
                 Human-readable label
             - 'probability': float
                 Probability of being a planet
-            - 'confidence': float (if return_details=True)
+            - 'confidence': float
                 Confidence score (max probability)
+            - 'base_predictions': dict (if return_details=True)
+                Individual predictions from base models
+            - 'agreement_score': float (if return_details=True)
+                Agreement between base models (0-1)
                 
         Examples
         --------
@@ -611,30 +721,41 @@ class HonestYDFEnsemble:
             'confidence': float(np.max(probabilities))
         }
         
-        # Add confidence information if requested
-        if return_details and 'confidence' in batch_results:
-            results['confidence'] = float(batch_results['confidence'][0])
+        # Add detailed information if requested
+        if return_details and 'base_predictions' in batch_results:
+            base_preds = {}
+            for model_name, preds in batch_results['base_predictions'].items():
+                base_preds[model_name] = {
+                    'prediction': int(preds[0]),
+                    'prediction_label': 'PLANET' if int(preds[0]) == 1 else 'FALSE POSITIVE'
+                }
+            results['base_predictions'] = base_preds
+            results['agreement_score'] = float(batch_results['agreement_score'][0])
         
         return results
     
     def summary(self) -> None:
         """Print model summary"""
         self._log("\n" + "=" * 90)
-        self._log("OPTIMIZED SINGLE GBT MODEL - MODEL SUMMARY")
+        self._log("HONEST YDF ENSEMBLE - MODEL SUMMARY")
         self._log("=" * 90)
         
         self._log("\n🎯 MODEL CONFIGURATION")
         self._log("-" * 90)
         self._log(f"  Features: {len(self.CURATED_FEATURES)} (no data leakage)")
-        self._log(f"  Model: Single Gradient Boosted Trees (optimized via Optuna)")
+        self._log(f"  Base Models: 3 (Random Forest, Gradient Boosted Trees, Extra Trees)")
+        self._log(f"  Meta-Learner: Logistic Regression")
         
         self._log("\n🔧 HYPERPARAMETERS")
         self._log("-" * 90)
         params = self.get_params()
+        self._log(f"  Random Forest: num_trees={params['rf_num_trees']}, "
+                  f"max_depth={params['rf_max_depth']}, min_examples={params['rf_min_examples']}")
         self._log(f"  Gradient Boosted Trees: num_trees={params['gbt_num_trees']}, "
-                  f"max_depth={params['gbt_max_depth']}, shrinkage={params['gbt_shrinkage']:.6f}")
-        self._log(f"                          subsample={params['gbt_subsample']:.4f}, "
-                  f"min_examples={params['gbt_min_examples']}, early_stopping={params['gbt_early_stopping']}")
+                  f"max_depth={params['gbt_max_depth']}, shrinkage={params['gbt_shrinkage']:.4f}")
+        self._log(f"  Extra Trees: num_trees={params['et_num_trees']}, "
+                  f"candidate_ratio={params['et_candidate_ratio']:.2f}")
+        self._log(f"  Meta-Learner: C={params['meta_C']:.4f}, max_iter={params['meta_max_iter']}")
         
         if self.training_time is not None:
             self._log(f"\n⏱️  TRAINING TIME: {self.training_time:.2f}s")
