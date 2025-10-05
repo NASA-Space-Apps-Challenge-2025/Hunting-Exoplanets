@@ -34,6 +34,14 @@ type ManualField = {
 type ManualFormState = Record<ManualFieldKey, string>;
 type ManualRow = Record<ManualFieldKey, number>;
 
+type EndpointInfo = {
+  method: "GET" | "POST";
+  path: string;
+  description: string;
+  details?: string[];
+};
+
+
 type UploadCardProps = {
   fields: ManualField[];
   error: string | null;
@@ -60,6 +68,37 @@ const manualFieldDefinitions: ManualField[] = [
 
 const requiredHeaders = manualFieldDefinitions.map((field) => field.key);
 
+const endpointCatalog: EndpointInfo[] = [
+  {
+    method: "GET",
+    path: "/health",
+    description: "Health check endpoint confirming the backend is reachable.",
+    details: ["Returns status and timestamp."]
+  },
+  {
+    method: "POST",
+    path: "/inference",
+    description: "Run the pretrained or session-specific model on an uploaded CSV.",
+    details: ["Multipart form-data with field named 'file'.", "Optional query param 'session' selects a retrained model."]
+  },
+  {
+    method: "POST",
+    path: "/retrain",
+    description: "Retrain the model with additional data and hyperparameters.",
+    details: ["Multipart form-data 'file' plus optional form params: learning_rate, max_depth, num_trees.", "Responds with new session_id and detailed metrics."]
+  },
+  {
+    method: "GET",
+    path: "/sessions",
+    description: "List available training sessions and summary metrics."
+  },
+  {
+    method: "GET",
+    path: "/graph",
+    description: "Retrieve visualization-ready metrics for a session via identifier query."
+  }
+];
+
 function downloadCsv(content: string, filename: string) {
   const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
@@ -70,6 +109,19 @@ function downloadCsv(content: string, filename: string) {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+async function extractErrorMessage(response: Response): Promise<string> {
+  try {
+    const data = await response.json();
+    if (data && typeof data.detail === 'string') {
+      return data.detail;
+    }
+    return JSON.stringify(data, null, 2);
+  } catch {
+    const fallback = await response.text();
+    return fallback || `Request failed with status ${response.status}`;
+  }
 }
 
 function parseManualCsv(text: string): ManualRow[] {
@@ -166,6 +218,14 @@ export default function Home() {
   const [uploadInfo, setUploadInfo] = useState<string | null>(null);
   const [uploadRowCount, setUploadRowCount] = useState<number>(0);
 
+  const [pretrainedFile, setPretrainedFile] = useState<File | null>(null);
+  const [pretrainedSession, setPretrainedSession] = useState("");
+  const [pretrainedResult, setPretrainedResult] = useState<Record<string, unknown> | null>(null);
+  const [pretrainedError, setPretrainedError] = useState<string | null>(null);
+  const [pretrainedLoading, setPretrainedLoading] = useState(false);
+
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+
   const manualRowCount = manualRows.length;
 
   function handleManualButtonClick() {
@@ -227,8 +287,52 @@ export default function Home() {
   function handleUploadTemplateDownload() {
     const header = manualFieldDefinitions.map((field) => field.key).join(",");
     const sampleRow = manualFieldDefinitions.map((field) => field.placeholder ?? "").join(",");
-    const csv = `${header}\n${sampleRow}`;
+    const csv = `${header}
+${sampleRow}`;
     downloadCsv(csv, "winnhacks_template.csv");
+  }
+
+  function handlePretrainedFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    setPretrainedFile(file);
+    setPretrainedResult(null);
+    setPretrainedError(null);
+  }
+
+  async function handlePretrainedSubmit() {
+    if (!pretrainedFile) {
+      setPretrainedError("Choose a CSV file before running the pretrained model.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", pretrainedFile);
+
+    const inferenceUrl = new URL('/inference', backendUrl);
+    if (pretrainedSession.trim().length > 0) {
+      inferenceUrl.searchParams.set('session', pretrainedSession.trim());
+    }
+
+    setPretrainedLoading(true);
+    setPretrainedError(null);
+    setPretrainedResult(null);
+
+    try {
+      const response = await fetch(inferenceUrl.toString(), {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        const message = await extractErrorMessage(response);
+        throw new Error(message);
+      }
+      const data = (await response.json()) as Record<string, unknown>;
+      setPretrainedResult(data);
+    } catch (error) {
+      setPretrainedError(error instanceof Error ? error.message : 'Failed to run pretrained model.');
+    } finally {
+      setPretrainedLoading(false);
+    }
   }
 
   function handleUploadFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -241,6 +345,7 @@ export default function Home() {
       setUploadError("Please upload a CSV file with extension .csv.");
       setUploadInfo(null);
       setUploadRowCount(0);
+      setPretrainedFile(null);
       event.target.value = "";
       return;
     }
@@ -253,16 +358,19 @@ export default function Home() {
         setUploadRowCount(rows.length);
         setUploadInfo(`Validated ${rows.length} row${rows.length === 1 ? "" : "s"} from ${file.name}.`);
         setUploadError(null);
+        setPretrainedFile(file);
       } catch (error) {
         setUploadInfo(null);
         setUploadRowCount(0);
         setUploadError(error instanceof Error ? error.message : "Unable to parse the provided CSV file.");
+        setPretrainedFile(null);
       }
     };
     reader.onerror = () => {
       setUploadInfo(null);
       setUploadRowCount(0);
       setUploadError("Unable to read the selected file. Please try again.");
+      setPretrainedFile(null);
     };
     reader.readAsText(file);
 
@@ -367,6 +475,79 @@ export default function Home() {
                     </span>
                     <span className="text-slate-400">Baseline evaluation</span>
                   </header>
+                  <div className="w-full space-y-3 text-left">
+                    <p className="text-xs uppercase tracking-[0.4em] text-cyan-400">Backend endpoints</p>
+                    <div className="grid gap-3 text-slate-200">
+                      {endpointCatalog.map((endpoint) => (
+                        <div
+                          key={endpoint.path}
+                          className="rounded-xl border border-cyan-400/20 bg-slate-900/70 p-4 text-left"
+                        >
+                          <div className="flex items-center gap-3 text-sm font-semibold">
+                            <span className="rounded-md border border-cyan-400/40 bg-cyan-400/10 px-2 py-0.5 text-cyan-200">
+                              {endpoint.method}
+                            </span>
+                            <span className="font-mono text-xs text-slate-100">{endpoint.path}</span>
+                          </div>
+                          <p className="mt-2 text-sm text-slate-300">{endpoint.description}</p>
+                          {endpoint.details ? (
+                            <ul className="mt-2 space-y-1 text-xs text-slate-400">
+                              {endpoint.details.map((detail) => (
+                                <li key={detail} className="leading-relaxed">- {detail}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="w-full rounded-2xl border border-cyan-400/20 bg-slate-950/70 p-6 text-left text-sm text-slate-200">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                      <label className="flex w-full flex-col gap-2 text-xs uppercase tracking-[0.4em]">
+                        <span className="text-cyan-400">Upload CSV</span>
+                        <input
+                          type="file"
+                          accept=".csv"
+                          onChange={handlePretrainedFileChange}
+                          className="w-full rounded-xl border border-cyan-400/30 bg-slate-950/60 px-4 py-3 text-sm text-white focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+                        />
+                        <span className="text-[10px] text-slate-500">Required columns: {requiredHeaders.join(', ')}</span>
+                      </label>
+                      <label className="flex w-full max-w-xs flex-col gap-2 text-xs uppercase tracking-[0.4em]">
+                        <span className="text-cyan-400">Session (optional)</span>
+                        <input
+                          type="text"
+                          value={pretrainedSession}
+                          onChange={(event) => setPretrainedSession(event.target.value)}
+                          placeholder="session id"
+                          className="w-full rounded-xl border border-cyan-400/30 bg-slate-950/60 px-4 py-3 text-sm text-white focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+                        />
+                        <span className="text-[10px] text-slate-500">Leave blank to use the base model.</span>
+                      </label>
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={handlePretrainedSubmit}
+                        disabled={pretrainedLoading}
+                        className={`rounded-full px-5 py-2 text-sm font-semibold transition ${pretrainedLoading ? 'bg-cyan-400/30 text-slate-600' : 'bg-cyan-500 text-slate-950 shadow-[0_0_25px_rgba(34,211,238,0.35)] hover:bg-cyan-400'}`}
+                      >
+                        {pretrainedLoading ? 'Running...' : 'Run Pretrained Model'}
+                      </button>
+                      {pretrainedFile ? (
+                        <span className="text-xs text-slate-400">Selected: {pretrainedFile.name}</span>
+                      ) : null}
+                    </div>
+                    {pretrainedError ? <p className="mt-3 text-sm text-rose-300">{pretrainedError}</p> : null}
+                    {pretrainedResult ? (
+                      <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-slate-950/80 p-4 text-left">
+                        <p className="text-sm font-semibold text-cyan-200">Inference response</p>
+                        <pre className="mt-2 max-h-64 overflow-auto rounded-xl bg-slate-900/70 p-4 text-xs text-slate-100">
+{JSON.stringify(pretrainedResult, null, 2)}
+                        </pre>
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="rounded-2xl border border-cyan-400/20 bg-slate-950/60 p-6 text-center text-sm text-slate-300">
                     <p>
                       Deploy our curated baseline trained on historical TESS and Kepler light curves. One click delivers vetted
