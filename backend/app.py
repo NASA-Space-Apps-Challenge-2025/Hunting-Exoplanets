@@ -93,6 +93,96 @@ app.add_middleware(
 # Initialize model manager
 model_manager = ModelManager()
 
+# Load or train base model before starting server
+def initialize_model():
+    """Initialize base model - load from disk or train new one"""
+    import sys
+    from pathlib import Path
+
+    model_path = model_manager.BASE_MODEL_DIR / "model.pkl"
+
+    if model_path.exists():
+        try:
+            print("🔍 Loading base model from disk...")
+            model_manager.load_base_model()
+            print("✅ Base model loaded successfully from disk")
+            return True
+        except Exception as e:
+            print(f"❌ Error loading base model: {e}")
+            return False
+    else:
+        print("⚠️  No base model found on disk")
+        print("🔄 Training new base model with optimal hyperparameters...")
+        print("   This may take a few minutes...")
+
+        try:
+            # Fetch training data from API
+            print("📥 Fetching training data from NASA Exoplanet Archive...")
+            training_data = model_manager.fetch_existing_data()
+
+            if training_data is None:
+                print("❌ Failed to fetch training data from API")
+                print("   Server will start without a base model")
+                return False
+
+            print(f"   Retrieved {len(training_data)} samples")
+
+            # Validate required columns
+            if 'koi_disposition' not in training_data.columns:
+                print("❌ Training data missing 'koi_disposition' column")
+                return False
+
+            # Prepare data
+            y = (training_data['koi_disposition'] == 'CONFIRMED').astype(int)
+            X = training_data[model_manager.REQUIRED_FEATURES]
+
+            # Check for missing features
+            missing_features = [f for f in model_manager.REQUIRED_FEATURES if f not in training_data.columns]
+            if missing_features:
+                print(f"❌ Missing required features: {missing_features}")
+                return False
+
+            print(f"   Training samples: {len(X)}")
+            print(f"   Positive samples (planets): {y.sum()} ({y.sum()/len(y)*100:.1f}%)")
+
+            # Train model (verbose=False to suppress YDF output)
+            model_manager.load_base_model(data=X, target=y)
+
+            # Save model
+            print("💾 Saving base model to disk...")
+            model_manager.save_base_model()
+
+            # Get metrics
+            metrics = model_manager._format_metrics(model_manager.base_model_metrics or {})
+            print("\n📊 Base Model Performance:", flush=True)
+            print(f"   Accuracy:  {metrics['accuracy']:.4f} ({metrics['accuracy']*100:.2f}%)", flush=True)
+            print(f"   Precision: {metrics['precision']:.4f}", flush=True)
+            print(f"   Recall:    {metrics['recall']:.4f}", flush=True)
+            print(f"   F1-Score:  {metrics['f1_score']:.4f}", flush=True)
+            print(f"   ROC-AUC:   {metrics['roc_auc']:.4f}", flush=True)
+
+            print("\n✅ Base model trained and saved successfully", flush=True)
+            return True
+
+        except Exception as e:
+            print(f"❌ Error training base model: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+# Initialize model before starting server
+print("=" * 80)
+print("🚀 EXOPLANET ML MODEL API - INITIALIZATION")
+print("=" * 80)
+
+if not initialize_model():
+    print("\n⚠️  Warning: Server starting without a base model")
+    print("   API endpoints will not work until a model is trained")
+
+print("\n" + "=" * 80)
+print("🌟 Starting FastAPI server...")
+print("=" * 80)
+
 
 @app.get(
     "/health",
@@ -132,6 +222,14 @@ async def inference(
             csv_data = pd.read_csv(io.BytesIO(contents))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid CSV format: {str(e)}")
+
+        # Validate features
+        is_valid, missing = model_manager.validate_features(csv_data)
+        if not is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing required features: {missing}. Required features: {model_manager.REQUIRED_FEATURES}"
+            )
 
         # Validate session if provided
         if session and not model_manager.session_exists(session):
@@ -186,6 +284,14 @@ async def retrain(
             new_data = pd.read_csv(io.BytesIO(contents))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid CSV format: {str(e)}")
+
+        # Validate features
+        is_valid, missing = model_manager.validate_features(new_data)
+        if not is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing required features: {missing}. Required features: {model_manager.REQUIRED_FEATURES}"
+            )
 
         # Prepare hyperparameters
         hyperparams = {

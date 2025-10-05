@@ -45,6 +45,7 @@ env/
 .env
 .env.local
 .env.*.local
+.claude
 
 # Logs
 *.log
@@ -62,6 +63,11 @@ logs/
 *.pth
 *.ckpt
 *.joblib
+
+# Model weights directory
+backend/models/base_model/model.pkl
+backend/models/base_model/metrics.json
+backend/models/base_model/metadata.json
 
 # Data files (uncomment if you don't want to track data)
 # *.csv
