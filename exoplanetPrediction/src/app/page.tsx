@@ -340,7 +340,7 @@ export default function Home() {
   const [userTrainResult, setUserTrainResult] = useState<Record<string, unknown> | null>(null);
   const [latestSessionId, setLatestSessionId] = useState<string | null>(null);
 
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "https://hunting-exoplanets-a1sm.onrender.com";
 
   const manualFields = useMemo(
     () => (modelType === "pretrained" ? PRETRAINED_MANUAL_FIELDS : USER_MANUAL_FIELDS),
@@ -729,11 +729,11 @@ ${sampleRow}`;
                 <h2 className="mt-2 text-xl font-semibold text-white">Hyperparameters of the ML model we have</h2>
               </div>
 
-              <div className="mt-6 flex flex-col items-center justify-center gap-4 text-sm sm:flex-row">
+              {/* <div className="mt-6 flex flex-col items-center justify-center gap-4 text-sm sm:flex-row">
                 <ActionButton label="Enter Manually" active={inputMode === "manual"} onClick={handleManualButtonClick} />
                 <span className="text-xs uppercase tracking-[0.6em] text-slate-400">or</span>
                 <ActionButton label="Upload CSV" active={inputMode === "upload"} onClick={handleUploadButtonClick} />
-              </div>
+              </div> */}
 
               <div className="flex flex-wrap items-center justify-center gap-3 text-sm">
                 <ToggleButton
@@ -751,7 +751,7 @@ ${sampleRow}`;
 
             {inputMode === "upload" ? (
               <div className="mt-10">
-                <UploadCard
+                {/* <UploadCard
                   fields={manualFields}
                   error={uploadError}
                   info={uploadInfo}
@@ -759,7 +759,7 @@ ${sampleRow}`;
                   onTemplateDownload={handleUploadTemplateDownload}
                   allowNumericGaps={modelType === "user"}
                   purposeLabel={modelType === "pretrained" ? "Pretrained inference" : "User retraining"}
-                />
+                /> */}
               </div>
             ) : null}
             <div className="mt-12 flex justify-center">
@@ -916,6 +916,11 @@ ${sampleRow}`;
                       )}
                     </div>
                   </div>
+                                <div className="mt-6 flex flex-col items-center justify-center gap-4 text-sm sm:flex-row">
+                <ActionButton label="Enter Manually" active={inputMode === "manual"} onClick={handleManualButtonClick} />
+                <span className="text-xs uppercase tracking-[0.6em] text-slate-400"></span>
+                {/* <ActionButton label="Upload CSV" active={inputMode === "upload"} onClick={handleUploadButtonClick} /> */}
+              </div>
                   <div className="w-full rounded-2xl border border-cyan-400/20 bg-slate-950/70 p-6 text-left text-sm text-slate-200">
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                       <label className="flex w-full flex-col gap-2 text-xs uppercase tracking-[0.4em]">
@@ -1016,6 +1021,14 @@ ${sampleRow}`;
                           Numeric blanks or "NULL" entries are ignored when validating retraining data.
                         </span>
                       </label>
+                      <div className="mt-3 flex items-center gap-3 text-[10px] uppercase tracking-[0.4em]">
+                        <span className="text-slate-500">or</span>
+                        <ActionButton
+                          label="Enter Manually"
+                          active={inputMode === "manual"}
+                          onClick={handleManualButtonClick}
+                        />
+                      </div>
                       <div className="rounded-xl border border-cyan-400/20 bg-slate-900/60 p-4 text-xs text-slate-300">
                         <p className="text-sm font-semibold text-cyan-200">Hyperparameters</p>
                         <p className="mt-1 leading-relaxed">Adjust learning rate, tree depth, and ensemble size before retraining.</p>
@@ -1341,55 +1354,55 @@ function ManualInputModal({
 
 
 
-function UploadCard({ fields, error, info, onFileChange, onTemplateDownload, allowNumericGaps = false, purposeLabel }: UploadCardProps) {
-  return (
-    <div className="rounded-2xl border border-cyan-400/20 bg-slate-950/70 p-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="text-left">
-          <p className="text-xs uppercase tracking-[0.6em] text-cyan-400">Upload Dataset</p>
-          <h3 className="mt-2 text-lg font-semibold text-white">Import KOI feature CSV</h3>
-          <p className="mt-2 text-sm text-slate-300">
-            Ensure the header row uses the exact feature names listed below. Column order does not matter, but the labels must
-            match.
-          </p>
-          {purposeLabel ? (
-            <p className="mt-1 text-xs uppercase tracking-[0.4em] text-cyan-400">{purposeLabel}</p>
-          ) : null}
-          {allowNumericGaps ? (
-            <p className="mt-1 text-xs text-emerald-300">
-              Numeric columns may include blank values; they will be ignored during validation.
-            </p>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          onClick={onTemplateDownload}
-          className="rounded-full border border-cyan-400/40 px-4 py-2 text-sm font-semibold text-cyan-200 transition hover:border-cyan-300 hover:text-cyan-100"
-        >
-          Download template CSV
-        </button>
-      </div>
+// function UploadCard({ fields, error, info, onFileChange, onTemplateDownload, allowNumericGaps = false, purposeLabel }: UploadCardProps) {
+//   return (
+//     <div className="rounded-2xl border border-cyan-400/20 bg-slate-950/70 p-6">
+//       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+//         <div className="text-left">
+//           <p className="text-xs uppercase tracking-[0.6em] text-cyan-400">Upload Dataset</p>
+//           <h3 className="mt-2 text-lg font-semibold text-white">Import KOI feature CSV</h3>
+//           <p className="mt-2 text-sm text-slate-300">
+//             Ensure the header row uses the exact feature names listed below. Column order does not matter, but the labels must
+//             match.
+//           </p>
+//           {purposeLabel ? (
+//             <p className="mt-1 text-xs uppercase tracking-[0.4em] text-cyan-400">{purposeLabel}</p>
+//           ) : null}
+//           {allowNumericGaps ? (
+//             <p className="mt-1 text-xs text-emerald-300">
+//               Numeric columns may include blank values; they will be ignored during validation.
+//             </p>
+//           ) : null}
+//         </div>
+//         <button
+//           type="button"
+//           onClick={onTemplateDownload}
+//           className="rounded-full border border-cyan-400/40 px-4 py-2 text-sm font-semibold text-cyan-200 transition hover:border-cyan-300 hover:text-cyan-100"
+//         >
+//           Download template CSV
+//         </button>
+//       </div>
 
-      <div className="mt-6 flex flex-col gap-6 lg:flex-row">
-        <label className="flex w-full max-w-sm cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-cyan-400/40 bg-slate-950/60 p-6 text-center text-sm text-slate-200 transition hover:border-cyan-300 hover:text-cyan-100">
-          <span className="text-base font-semibold text-white">Select CSV file</span>
-          <span className="text-xs text-slate-400">Accepted columns only · .csv</span>
-          <input type="file" accept=".csv" className="hidden" onChange={onFileChange} />
-        </label>
-        <div className="flex-1 rounded-2xl border border-white/10 bg-slate-950/50 p-6 text-left text-xs text-slate-300">
-          <p className="text-sm font-semibold text-cyan-200">Required features</p>
-          <ul className="mt-3 grid gap-2 sm:grid-cols-2">
-            {fields.map((field) => (
-              <li key={field.key} className="rounded-lg border border-cyan-400/10 bg-slate-900/60 px-3 py-2 font-mono text-[11px]">
-                {field.key}
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
+//       <div className="mt-6 flex flex-col gap-6 lg:flex-row">
+//         <label className="flex w-full max-w-sm cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-cyan-400/40 bg-slate-950/60 p-6 text-center text-sm text-slate-200 transition hover:border-cyan-300 hover:text-cyan-100">
+//           <span className="text-base font-semibold text-white">Select CSV file</span>
+//           <span className="text-xs text-slate-400">Accepted columns only · .csv</span>
+//           <input type="file" accept=".csv" className="hidden" onChange={onFileChange} />
+//         </label>
+//         <div className="flex-1 rounded-2xl border border-white/10 bg-slate-950/50 p-6 text-left text-xs text-slate-300">
+//           <p className="text-sm font-semibold text-cyan-200">Required features</p>
+//           <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+//             {fields.map((field) => (
+//               <li key={field.key} className="rounded-lg border border-cyan-400/10 bg-slate-900/60 px-3 py-2 font-mono text-[11px]">
+//                 {field.key}
+//               </li>
+//             ))}
+//           </ul>
+//         </div>
+//       </div>
 
-      {error ? <p className="mt-4 text-sm text-rose-300">{error}</p> : null}
-      {info ? <p className="mt-2 text-sm text-emerald-300">{info}</p> : null}
-    </div>
-  );
-}
+//       {error ? <p className="mt-4 text-sm text-rose-300">{error}</p> : null}
+//       {info ? <p className="mt-2 text-sm text-emerald-300">{info}</p> : null}
+//     </div>
+//   );
+// }
