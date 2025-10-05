@@ -1,5 +1,6 @@
 ﻿"use client";
 
+import Image from "next/image";
 import { useState } from "react";
 
 type InputMode = "manual" | "upload";
@@ -14,8 +15,15 @@ export default function Home() {
       <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-12 px-6 py-12 lg:px-10">
         <header className="rounded-3xl border border-cyan-400/20 bg-slate-900/60 p-8 shadow-[0_0_60px_rgba(34,211,238,0.15)]">
           <div className="flex flex-wrap items-center gap-6">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-cyan-400/50 bg-slate-950/80 text-lg font-semibold text-cyan-300">
-              Logo
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-cyan-400/50 bg-slate-950/80">
+              <Image
+                src="/winnhacks-logo.png"
+                alt="WinnHacks logo"
+                width={64}
+                height={64}
+                className="h-14 w-14 object-contain"
+                priority
+              />
             </div>
             <div className="space-y-2">
               <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">
@@ -77,81 +85,85 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="mt-12 grid gap-8 text-center lg:grid-cols-2">
-              <div className="flex flex-col items-center space-y-6 text-center">
-                <header className="flex items-center justify-center gap-3 text-sm font-semibold text-cyan-200">
-                  <span className="rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3 py-1 text-xs uppercase tracking-widest">
-                    Pretrained Flow
-                  </span>
-                  <span className="text-slate-400">Baseline evaluation</span>
-                </header>
-                <div className="rounded-2xl border border-cyan-400/20 bg-slate-950/60 p-6 text-center text-sm text-slate-300">
-                  <p>
-                    Deploy our curated baseline trained on historical TESS and Kepler light curves. One click delivers vetted
-                    metrics and highlights comparative gains from your custom experiments.
-                  </p>
-                </div>
-                <div className="flex flex-col items-center gap-4 text-cyan-300">
-                  <ArrowDown />
-                  <div className="w-full rounded-2xl border border-cyan-400/30 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6 text-center shadow-[0_0_40px_rgba(34,211,238,0.12)]">
-                    <p className="text-sm uppercase tracking-[0.4em] text-cyan-400">Result from our model</p>
-                    <p className="mt-3 text-xl font-semibold text-white">ROC 0.96 | F1 0.89 | Latency 42s</p>
-                    <p className="mt-2 text-xs text-slate-400">Auto-generated diagnostic deck with candidate shortlist</p>
+            <div className="mt-12 flex justify-center">
+              {modelType === "pretrained" ? (
+                <div className="flex w-full max-w-3xl flex-col items-center space-y-6 text-center rounded-2xl border border-cyan-400/15 bg-slate-950/40 p-8 shadow-[0_0_35px_rgba(34,211,238,0.1)]">
+                  <header className="flex items-center justify-center gap-3 text-sm font-semibold text-cyan-200">
+                    <span className="rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3 py-1 text-xs uppercase tracking-widest">
+                      Pretrained Flow
+                    </span>
+                    <span className="text-slate-400">Baseline evaluation</span>
+                  </header>
+                  <div className="rounded-2xl border border-cyan-400/20 bg-slate-950/60 p-6 text-center text-sm text-slate-300">
+                    <p>
+                      Deploy our curated baseline trained on historical TESS and Kepler light curves. One click delivers vetted
+                      metrics and highlights comparative gains from your custom experiments.
+                    </p>
+                  </div>
+                  <div className="flex flex-col items-center gap-4 text-cyan-300">
+                    <ArrowDown />
+                    <div className="w-full rounded-2xl border border-cyan-400/30 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6 text-center shadow-[0_0_40px_rgba(34,211,238,0.12)]">
+                      <p className="text-sm uppercase tracking-[0.4em] text-cyan-400">Result from our model</p>
+                      <p className="mt-3 text-xl font-semibold text-white">ROC 0.96 | F1 0.89 | Latency 42s</p>
+                      <p className="mt-2 text-xs text-slate-400">Auto-generated diagnostic deck with candidate shortlist</p>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : null}
 
-              <div className="flex flex-col items-center space-y-6 text-center">
-                <header className="flex items-center justify-center gap-3 text-sm font-semibold text-cyan-200">
-                  <span className="rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3 py-1 text-xs uppercase tracking-widest">
-                    User Trained Flow
-                  </span>
-                  <span className="text-slate-400">Customizable exploration</span>
-                </header>
-                <div className="rounded-2xl border border-cyan-400/30 bg-slate-950/70 p-6 text-center">
-                  <p className="text-sm uppercase tracking-[0.4em] text-cyan-400">Hyperparameters</p>
-                  <div className="mt-6 grid gap-4">
-                    <InputField
-                      label="Learning Rate"
-                      helper="Float between 0 and 1"
-                      placeholder="0.001"
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.0001}
-                    />
-                    <InputField
-                      label="Max Tree Depth"
-                      helper="Integer (1-2048)"
-                      placeholder="12"
-                      type="number"
-                      min={1}
-                      max={2048}
-                    />
-                    <InputField
-                      label="Number of Trees"
-                      helper="Up to 5000 estimators"
-                      placeholder="500"
-                      type="number"
-                      min={1}
-                      max={5000}
-                    />
-                    <InputField
-                      label="Hessian Gain"
-                      helper="Custom optimization signal"
-                      placeholder="Auto-detect"
-                    />
+              {modelType === "user" ? (
+                <div className="flex w-full max-w-3xl flex-col items-center space-y-6 text-center rounded-2xl border border-cyan-400/15 bg-slate-950/40 p-8 shadow-[0_0_35px_rgba(34,211,238,0.1)]">
+                  <header className="flex items-center justify-center gap-3 text-sm font-semibold text-cyan-200">
+                    <span className="rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3 py-1 text-xs uppercase tracking-widest">
+                      User Trained Flow
+                    </span>
+                    <span className="text-slate-400">Customizable exploration</span>
+                  </header>
+                  <div className="rounded-2xl border border-cyan-400/30 bg-slate-950/70 p-6 text-center">
+                    <p className="text-sm uppercase tracking-[0.4em] text-cyan-400">Hyperparameters</p>
+                    <div className="mt-6 grid gap-4">
+                      <InputField
+                        label="Learning Rate"
+                        helper="Float between 0 and 1"
+                        placeholder="0.001"
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.0001}
+                      />
+                      <InputField
+                        label="Max Tree Depth"
+                        helper="Integer (1-2048)"
+                        placeholder="12"
+                        type="number"
+                        min={1}
+                        max={2048}
+                      />
+                      <InputField
+                        label="Number of Trees"
+                        helper="Up to 5000 estimators"
+                        placeholder="500"
+                        type="number"
+                        min={1}
+                        max={5000}
+                      />
+                      <InputField
+                        label="Hessian Gain"
+                        helper="Custom optimization signal"
+                        placeholder="Auto-detect"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-center gap-4 text-cyan-300">
+                    <ArrowDown />
+                    <div className="w-full rounded-2xl border border-cyan-400/30 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6 text-center shadow-[0_0_40px_rgba(34,211,238,0.12)]">
+                      <p className="text-sm uppercase tracking-[0.4em] text-cyan-400">Results and Graphs</p>
+                      <p className="mt-3 text-xl font-semibold text-white">Interactive ROC, PR, SHAP, and transit fits</p>
+                      <p className="mt-2 text-xs text-slate-400">Exportable as slides, CSVs, and WinnHacks report pack</p>
+                    </div>
                   </div>
                 </div>
-                <div className="flex flex-col items-center gap-4 text-cyan-300">
-                  <ArrowDown />
-                  <div className="w-full rounded-2xl border border-cyan-400/30 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6 text-center shadow-[0_0_40px_rgba(34,211,238,0.12)]">
-                    <p className="text-sm uppercase tracking-[0.4em] text-cyan-400">Results and Graphs</p>
-                    <p className="mt-3 text-xl font-semibold text-white">Interactive ROC, PR, SHAP, and transit fits</p>
-                    <p className="mt-2 text-xs text-slate-400">Exportable as slides, CSVs, and WinnHacks report pack</p>
-                  </div>
-                </div>
-              </div>
+              ) : null}
             </div>
           </section>
         </main>
@@ -227,3 +239,7 @@ function ArrowDown() {
     </div>
   );
 }
+
+
+
+
