@@ -34,19 +34,57 @@ type ManualField = {
 type ManualFormState = Record<ManualFieldKey, string>;
 type ManualRow = Record<ManualFieldKey, number>;
 
-type EndpointInfo = {
-  method: "GET" | "POST";
-  path: string;
-  description: string;
-  details?: string[];
+type ConfusionMatrix = [
+  [number, number],
+  [number, number]
+];
+
+type ModelMetrics = {
+  accuracy?: number;
+  precision?: number;
+  recall?: number;
+  f1_score?: number;
+  roc_auc?: number;
+  confusion_matrix?: ConfusionMatrix;
+  [key: string]: unknown;
+};
+
+type ModelHyperparameters = {
+  learning_rate?: number;
+  max_depth?: number;
+  num_trees?: number;
+  [key: string]: unknown;
+};
+
+type ModelTrainingInfo = {
+  training_samples?: number;
+  features?: string[];
+  trained_at?: string;
+  [key: string]: unknown;
 };
 
 type ModelInfo = {
   model_type?: string;
-  metrics?: Record<string, unknown>;
-  hyperparameters?: Record<string, unknown>;
-  training_info?: Record<string, unknown>;
+  metrics?: ModelMetrics;
+  hyperparameters?: ModelHyperparameters;
+  training_info?: ModelTrainingInfo;
   timestamp?: string;
+};
+
+const METRIC_KEYS = ["accuracy", "precision", "recall", "f1_score", "roc_auc"] as const;
+
+const METRIC_LABELS: Record<(typeof METRIC_KEYS)[number], string> = {
+  accuracy: "Accuracy",
+  precision: "Precision",
+  recall: "Recall",
+  f1_score: "F1 Score",
+  roc_auc: "ROC AUC",
+};
+
+const HYPERPARAM_LABELS: Record<keyof ModelHyperparameters, string> = {
+  learning_rate: "Learning Rate",
+  max_depth: "Max Depth",
+  num_trees: "Number of Trees",
 };
 
 
@@ -75,42 +113,6 @@ const manualFieldDefinitions: ManualField[] = [
 ];
 
 const requiredHeaders = manualFieldDefinitions.map((field) => field.key);
-
-const endpointCatalog: EndpointInfo[] = [
-  {
-    method: "GET",
-    path: "/health",
-    description: "Health check endpoint confirming the backend is reachable.",
-    details: ["Returns status and timestamp."]
-  },
-  {
-    method: "GET",
-    path: "/info",
-    description: "Retrieve base model metadata, metrics, and training info."
-  },
-  {
-    method: "POST",
-    path: "/inference",
-    description: "Run the pretrained or session-specific model on an uploaded CSV.",
-    details: ["Multipart form-data with field named 'file'.", "Optional query param 'session' selects a retrained model."]
-  },
-  {
-    method: "POST",
-    path: "/retrain",
-    description: "Retrain the model with additional data and hyperparameters.",
-    details: ["Multipart form-data 'file' plus optional form params: learning_rate, max_depth, num_trees.", "Responds with new session_id and detailed metrics."]
-  },
-  {
-    method: "GET",
-    path: "/sessions",
-    description: "List available training sessions and summary metrics."
-  },
-  {
-    method: "GET",
-    path: "/graph",
-    description: "Retrieve visualization-ready metrics for a session via identifier query."
-  }
-];
 
 function downloadCsv(content: string, filename: string) {
   const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
@@ -220,6 +222,34 @@ function createEmptyManualForm(): ManualFormState {
   }, {} as ManualFormState);
 }
 
+function formatMetricValue(value: unknown) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "—";
+  }
+  if (value >= 0 && value <= 1) {
+    return `${(value * 100).toFixed(2)}%`;
+  }
+  return Number.isInteger(value) ? value.toString() : value.toFixed(2);
+}
+
+function formatHyperparameterValue(value: unknown) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "—";
+  }
+  return Number.isInteger(value) ? value.toString() : value.toFixed(2);
+}
+
+function formatTimestamp(value?: string) {
+  if (!value) {
+    return "—";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
 export default function Home() {
   const [inputMode, setInputMode] = useState<InputMode>("manual");
   const [modelType, setModelType] = useState<ModelType>("pretrained");
@@ -253,6 +283,10 @@ export default function Home() {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
   const manualRowCount = manualRows.length;
+  const confusionMatrix = modelInfo?.metrics?.confusion_matrix;
+  const trainingFeatures = modelInfo?.training_info?.features ?? [];
+  const hasTrainingFeatures = trainingFeatures.length > 0;
+  const modelUpdatedAt = modelInfo?.timestamp ?? modelInfo?.training_info?.trained_at;
 
   useEffect(() => {
     let cancelled = false;
@@ -586,30 +620,149 @@ ${sampleRow}`;
                     </span>
                     <span className="text-slate-400">Baseline evaluation</span>
                   </header>
-                  <div className="w-full space-y-3 text-left">
-                    <p className="text-xs uppercase tracking-[0.4em] text-cyan-400">Backend endpoints</p>
-                    <div className="grid gap-3 text-slate-200">
-                      {endpointCatalog.map((endpoint) => (
-                        <div
-                          key={endpoint.path}
-                          className="rounded-xl border border-cyan-400/20 bg-slate-900/70 p-4 text-left"
-                        >
-                          <div className="flex items-center gap-3 text-sm font-semibold">
-                            <span className="rounded-md border border-cyan-400/40 bg-cyan-400/10 px-2 py-0.5 text-cyan-200">
-                              {endpoint.method}
-                            </span>
-                            <span className="font-mono text-xs text-slate-100">{endpoint.path}</span>
-                          </div>
-                          <p className="mt-2 text-sm text-slate-300">{endpoint.description}</p>
-                          {endpoint.details ? (
-                            <ul className="mt-2 space-y-1 text-xs text-slate-400">
-                              {endpoint.details.map((detail) => (
-                                <li key={detail} className="leading-relaxed">- {detail}</li>
-                              ))}
-                            </ul>
-                          ) : null}
+                  <div className="w-full space-y-4 text-left">
+                    <p className="text-xs uppercase tracking-[0.4em] text-cyan-400">Model snapshot</p>
+                    <div className="rounded-2xl border border-cyan-400/20 bg-slate-900/70 p-6 text-left text-slate-200">
+                      {infoLoading ? (
+                        <div className="flex items-center gap-3 text-sm text-slate-300">
+                          <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300" />
+                          <span>Loading model metadata...</span>
                         </div>
-                      ))}
+                      ) : infoError ? (
+                        <div className="rounded-xl border border-rose-400/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+                          {infoError}
+                        </div>
+                      ) : modelInfo ? (
+                        <div className="space-y-6">
+                          <div className="flex flex-wrap items-start justify-between gap-4">
+                            <div>
+                              <p className="text-[11px] uppercase tracking-[0.4em] text-cyan-400">Model type</p>
+                              <p className="mt-2 text-xl font-semibold text-white">
+                                {modelInfo.model_type ?? "Unknown model"}
+                              </p>
+                            </div>
+                            <div className="text-right text-xs text-slate-400">
+                              <p className="text-[10px] uppercase tracking-[0.4em] text-cyan-400">Last updated</p>
+                              <p className="mt-2 text-sm text-slate-200">{formatTimestamp(modelUpdatedAt)}</p>
+                            </div>
+                          </div>
+                          <div className="space-y-3">
+                            <p className="text-[11px] uppercase tracking-[0.4em] text-cyan-400">Core metrics</p>
+                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                              {METRIC_KEYS.map((metricKey) => {
+                                const value = modelInfo.metrics?.[metricKey];
+                                const formatted = formatMetricValue(value);
+                                const valueClass = typeof value === "number" && !Number.isNaN(value)
+                                  ? "text-white"
+                                  : "text-slate-500";
+                                return (
+                                  <div
+                                    key={metricKey}
+                                    className="rounded-xl border border-cyan-400/15 bg-slate-950/60 p-4"
+                                  >
+                                    <p className="text-[11px] uppercase tracking-[0.3em] text-cyan-300">
+                                      {METRIC_LABELS[metricKey]}
+                                    </p>
+                                    <p className={`mt-2 text-2xl font-semibold ${valueClass}`}>{formatted}</p>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          {confusionMatrix ? (
+                            <div className="space-y-3">
+                              <p className="text-[11px] uppercase tracking-[0.4em] text-cyan-400">Confusion matrix</p>
+                              <div className="overflow-hidden rounded-xl border border-cyan-400/15 bg-slate-950/60">
+                                <table className="w-full text-sm text-slate-200">
+                                  <thead className="bg-slate-900/70 text-xs uppercase tracking-[0.3em] text-slate-400">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left" />
+                                      <th className="px-3 py-2 text-center">Predicted Negative</th>
+                                      <th className="px-3 py-2 text-center">Predicted Positive</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-800/70">
+                                    {confusionMatrix.map((row, rowIndex) => (
+                                      <tr key={`confusion-row-${rowIndex}`} className="text-center">
+                                        <th className="px-3 py-2 text-left text-xs uppercase tracking-[0.3em] text-cyan-300">
+                                          {rowIndex === 0 ? "Actual Negative" : "Actual Positive"}
+                                        </th>
+                                        {row.map((cell, columnIndex) => (
+                                          <td
+                                            key={`confusion-cell-${rowIndex}-${columnIndex}`}
+                                            className="px-3 py-2 font-mono text-base text-white"
+                                          >
+                                            {cell}
+                                          </td>
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          ) : null}
+                          <div className="space-y-3">
+                            <p className="text-[11px] uppercase tracking-[0.4em] text-cyan-400">Hyperparameters</p>
+                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                              {(Object.keys(HYPERPARAM_LABELS) as (keyof ModelHyperparameters)[]).map((paramKey) => {
+                                const value = modelInfo.hyperparameters?.[paramKey];
+                                const formatted = formatHyperparameterValue(value);
+                                const valueClass = typeof value === "number" && !Number.isNaN(value)
+                                  ? "text-white"
+                                  : "text-slate-500";
+                                return (
+                                  <div
+                                    key={paramKey}
+                                    className="rounded-xl border border-cyan-400/15 bg-slate-950/60 p-4"
+                                  >
+                                    <p className="text-[11px] uppercase tracking-[0.3em] text-cyan-300">
+                                      {HYPERPARAM_LABELS[paramKey]}
+                                    </p>
+                                    <p className={`mt-2 text-xl font-semibold ${valueClass}`}>{formatted}</p>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div className="space-y-3">
+                            <p className="text-[11px] uppercase tracking-[0.4em] text-cyan-400">Training info</p>
+                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                              <div className="rounded-xl border border-cyan-400/15 bg-slate-950/60 p-4">
+                                <p className="text-[11px] uppercase tracking-[0.3em] text-cyan-300">Training samples</p>
+                                <p className="mt-2 text-xl font-semibold text-white">
+                                  {modelInfo.training_info?.training_samples ?? "—"}
+                                </p>
+                              </div>
+                              <div className="rounded-xl border border-cyan-400/15 bg-slate-950/60 p-4 sm:col-span-2 lg:col-span-1">
+                                <p className="text-[11px] uppercase tracking-[0.3em] text-cyan-300">Trained at</p>
+                                <p className="mt-2 text-sm text-slate-200">
+                                  {formatTimestamp(modelInfo.training_info?.trained_at)}
+                                </p>
+                              </div>
+                            </div>
+                            {hasTrainingFeatures ? (
+                              <div>
+                                <p className="text-[11px] uppercase tracking-[0.3em] text-cyan-300">
+                                  Features ({trainingFeatures.length})
+                                </p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {trainingFeatures.map((feature) => (
+                                    <span
+                                      key={feature}
+                                      className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-200"
+                                    >
+                                      {feature}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-slate-400">Model details are unavailable right now.</div>
+                      )}
                     </div>
                   </div>
                   <div className="w-full rounded-2xl border border-cyan-400/20 bg-slate-950/70 p-6 text-left text-sm text-slate-200">
@@ -659,12 +812,7 @@ ${sampleRow}`;
                       </div>
                     ) : null}
                   </div>
-                  <div className="rounded-2xl border border-cyan-400/20 bg-slate-950/60 p-6 text-center text-sm text-slate-300">
-                    <p>
-                      Deploy our curated baseline trained on historical TESS and Kepler light curves. One click delivers vetted
-                      metrics and highlights comparative gains from your custom experiments.
-                    </p>
-                  </div>
+
                   <div className="flex flex-col items-center gap-4 text-cyan-300">
                     <ArrowDown />
                     <div className="w-full rounded-2xl border border-cyan-400/30 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6 text-center shadow-[0_0_40px_rgba(34,211,238,0.12)]">
@@ -1043,25 +1191,3 @@ function UploadCard({ fields, error, info, onFileChange, onTemplateDownload }: U
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
