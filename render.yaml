@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: exoplanet-ml-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    rootDir: backend
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13"
+    disk:
+      name: model-storage
+      mountPath: /opt/render/project/src/backend/models
+      sizeGB: 1

@@ -8,10 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-# Add models directory to path to import ydf_ensemble
-MODELS_DIR = Path(__file__).parent.parent / "models"
-sys.path.insert(0, str(MODELS_DIR))
-
+# Import ydf_ensemble from current directory
 from ydf_ensemble import HonestYDFEnsemble
 
 
@@ -234,12 +231,19 @@ class ModelManager:
 
         Args:
             session_id: Unique session identifier
-            data: Training data (must include 'target' column or be passed separately)
+            data: Training data (must include 'target' or 'koi_disposition' column)
             hyperparams: Hyperparameters for model training
 
         Returns:
             Dictionary containing metrics and comparison data
         """
+        # Validate that target column exists
+        if 'target' not in data.columns and 'koi_disposition' not in data.columns:
+            raise ValueError(
+                "Training data must contain either 'target' or 'koi_disposition' column. "
+                f"Available columns: {list(data.columns)}"
+            )
+
         # Check minimum data requirements
         MIN_TRAINING_SAMPLES = 20
         if len(data) < MIN_TRAINING_SAMPLES:
@@ -247,14 +251,13 @@ class ModelManager:
                 f"Insufficient training data: {len(data)} rows provided, "
                 f"but at least {MIN_TRAINING_SAMPLES} rows are required for reliable training."
             )
-        
+
         # Validate features
         is_valid, missing = self.validate_features(data)
         if not is_valid:
             raise ValueError(f"Missing required features: {missing}")
 
         # Extract features and target
-        # Assume target is in a column named 'koi_disposition' or 'target'
         if 'target' in data.columns:
             y = data['target']
             # Select features in the correct order
@@ -267,10 +270,16 @@ class ModelManager:
                 'CANDIDATE': 1,
                 'FALSE POSITIVE': 0
             })
+
+            # Remove rows with missing target (if any unmapped values)
+            valid_idx = y.notna()
+            if not valid_idx.all():
+                print(f"   ⚠️  Removing {(~valid_idx).sum()} rows with unknown disposition values", flush=True)
+                data = data[valid_idx].copy()
+                y = y[valid_idx]
+
             # Select features in the correct order
             X = data[self.REQUIRED_FEATURES].copy()
-        else:
-            raise ValueError("Data must contain 'target' or 'koi_disposition' column")
 
         # Ensure columns are in the correct order (pandas will reorder automatically)
         # This is important for model consistency

@@ -23,6 +23,8 @@ pip install -r requirements.txt
 
 ## Running the Server
 
+### Local Development
+
 ```bash
 # Development mode
 python app.py
@@ -32,6 +34,10 @@ uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 The API will be available at `http://localhost:8000`
+
+### Production Deployment
+
+See [RENDER_DEPLOYMENT.md](./RENDER_DEPLOYMENT.md) for detailed instructions on deploying to Render.com's free tier.
 
 ## API Endpoints
 
