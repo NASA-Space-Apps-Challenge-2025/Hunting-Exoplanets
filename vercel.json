@@ -1,17 +1,14 @@
 {
-  "builds": [
-    {
-      "src": "Dockerfile",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "."
-      }
+  "functions": {
+    "api/**/*.py": {
+      "maxDuration": 300,
+      "memory": 3008
     }
-  ],
-  "routes": [
+  },
+  "rewrites": [
     {
-      "src": "/(.*)",
-      "dest": "/"
+      "source": "/(.*)",
+      "destination": "/api/index"
     }
   ]
 }
