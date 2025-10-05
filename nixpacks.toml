@@ -1,8 +1,8 @@
 [start]
-cmd = "bash ./start.sh"
+cmd = ["sh", "-c", "python3 -m uvicorn backend.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
 
 [phases.setup]
-nixPkgs = ["python311", "gcc", "gfortran", "bash"]
+nixPkgs = ["python311", "gcc", "gfortran"]
 
 [phases.install]
 cmds = [
