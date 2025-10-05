@@ -1,9 +1,11 @@
-data/
+data/raw/
+data/processed/
 notebooks/
 results/
 models/train_ensemble.py
 models/ydf_ensemble_backup.py
 backend/test_column_order.py
+backend/README.md
 *.ipynb
 .git/
 .gitignore
@@ -11,11 +13,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-*.egg
-*.egg-info/
-dist/
-build/
 .DS_Store
-*.md
 README.md
+.pytest_cache/
+.vscode/
