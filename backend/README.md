@@ -61,8 +61,24 @@ Perform inference on uploaded CSV data.
 ```json
 {
   "session": "base_model",
-  "predictions": [...],
-  "num_predictions": 100,
+  "predictions": [
+    {
+      "prediction": 1,
+      "label": "Exoplanet",
+      "confidence": null
+    },
+    {
+      "prediction": 0,
+      "label": "Not Exoplanet",
+      "confidence": null
+    },
+    {
+      "prediction": 1,
+      "label": "Exoplanet",
+      "confidence": null
+    }
+  ],
+  "num_predictions": 3,
   "timestamp": "2025-10-04T12:00:00.000000"
 }
 ```
@@ -77,6 +93,10 @@ curl -X POST "http://localhost:8000/inference" \
 curl -X POST "http://localhost:8000/inference?session=abc-123-def" \
   -F "file=@data.csv"
 ```
+
+**Common Error - 405 Method Not Allowed:**
+- ❌ Using GET: `curl http://localhost:8000/inference` (WRONG)
+- ✅ Use POST: `curl -X POST http://localhost:8000/inference -F "file=@data.csv"` (CORRECT)
 
 ---
 

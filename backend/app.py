@@ -20,9 +20,15 @@ class HealthResponse(BaseModel):
     timestamp: str = Field(..., description="Current UTC timestamp")
 
 
+class PredictionResult(BaseModel):
+    prediction: int = Field(..., description="Binary prediction (1=Exoplanet, 0=Not Exoplanet)")
+    label: str = Field(..., description="Human-readable label (Exoplanet or Not Exoplanet)")
+    confidence: Optional[float] = Field(None, description="Confidence score (reserved for future use)")
+
+
 class InferenceResponse(BaseModel):
     session: str = Field(..., description="Session ID used for inference or 'base_model'")
-    predictions: List[Any] = Field(..., description="List of predictions")
+    predictions: List[PredictionResult] = Field(..., description="List of prediction results with labels")
     num_predictions: int = Field(..., description="Number of predictions made")
     timestamp: str = Field(..., description="UTC timestamp of inference")
 
@@ -242,7 +248,16 @@ async def inference(
             raise HTTPException(status_code=404, detail=f"Session {session} not found")
 
         # Perform inference
-        predictions = model_manager.predict(csv_data, session)
+        raw_predictions = model_manager.predict(csv_data, session)
+
+        # Convert raw predictions to human-readable format
+        predictions = [
+            {
+                "prediction": int(pred),
+                "label": "Exoplanet" if int(pred) == 1 else "Not Exoplanet",
+            }
+            for pred in raw_predictions
+        ]
 
         return {
             "session": session or "base_model",
@@ -319,6 +334,25 @@ async def retrain(
         else:
             print(f"   ⚠️  No existing data fetched, using only new data ({len(new_data)} rows)", flush=True)
             combined_data = new_data
+            
+        # Check if we have sufficient data
+        MIN_REQUIRED_ROWS = 20
+        if len(combined_data) < MIN_REQUIRED_ROWS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient training data: {len(combined_data)} rows available, "
+                       f"but at least {MIN_REQUIRED_ROWS} rows are required. "
+                       f"The NASA Exoplanet Archive API request timed out and only {len(new_data)} new rows were provided. "
+                       f"Please try again or provide more training data."
+            )
+        
+        # Validate that combined data has target column
+        if 'koi_disposition' not in combined_data.columns and 'target' not in combined_data.columns:
+            raise HTTPException(
+                status_code=400,
+                detail="Training data must contain either 'koi_disposition' or 'target' column. "
+                       f"Available columns: {list(combined_data.columns)}"
+            )
 
         # Train new model and get metrics
         training_result = model_manager.train_model(session_id, combined_data, hyperparams)
@@ -345,6 +379,9 @@ async def retrain(
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        print(f"❌ Retraining error: {str(e)}", flush=True)
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Retraining failed: {str(e)}")
 
 
@@ -412,4 +449,6 @@ async def graph(identifier: str = Query(..., description="Session ID from the re
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import os
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
