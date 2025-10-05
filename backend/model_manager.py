@@ -52,21 +52,15 @@ class ModelManager:
         except Exception as e:
             print(f"Error loading config: {e}")
 
-        # Return default hyperparameters from ydf_ensemble.py in models folder
-        # These are the optimized parameters from Optuna tuning
+        # Return default hyperparameters for optimized single GBT model
+        # These are the optimized parameters from Optuna tuning (Trial #133, Oct 2025)
         return {
-            "rf_num_trees": 800,
-            "rf_max_depth": 50,
-            "rf_min_examples": 5,
-            "gbt_num_trees": 700,
-            "gbt_max_depth": 8,
-            "gbt_shrinkage": 0.03,  # learning_rate
-            "gbt_subsample": 0.70,
-            "gbt_early_stopping": 40,
-            "et_num_trees": 300,
-            "et_candidate_ratio": 0.40,
-            "meta_C": 0.05,
-            "meta_max_iter": 2000,
+            "gbt_num_trees": 1100,
+            "gbt_max_depth": 6,
+            "gbt_shrinkage": 0.007094192442381623,
+            "gbt_subsample": 0.7314794732228673,
+            "gbt_min_examples": 4,
+            "gbt_early_stopping": 60,
             "random_seed": 42,
             "verbose": True
         }
