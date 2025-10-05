@@ -546,6 +546,9 @@ async def loss_comparison(session: Optional[str] = Query(None, description="Opti
         raise HTTPException(status_code=500, detail=f"Failed to compare loss metrics: {str(e)}")
 
 
+# Vercel handler
+handler = app
+
 if __name__ == "__main__":
     import uvicorn
     import os
