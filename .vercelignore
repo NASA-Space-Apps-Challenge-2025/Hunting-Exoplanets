@@ -3,6 +3,7 @@ notebooks/
 results/
 models/train_ensemble.py
 models/ydf_ensemble_backup.py
+backend/test_column_order.py
 *.ipynb
 .git/
 .gitignore
@@ -11,9 +12,10 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
-*.so
 *.egg
 *.egg-info/
 dist/
 build/
 .DS_Store
+*.md
+README.md
