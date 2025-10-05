@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Image from "next/image";
-import { ChangeEvent, useEffect, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
 type InputMode = "manual" | "upload";
 type ModelType = "pretrained" | "user";
@@ -19,7 +19,8 @@ type ManualFieldKey =
   | "koi_srad"
   | "koi_kepmag"
   | "koi_insol"
-  | "koi_teq";
+  | "koi_teq"
+  | "koi_disposition";
 
 type ManualField = {
   key: ManualFieldKey;
@@ -29,10 +30,12 @@ type ManualField = {
   min?: number;
   max?: number;
   step?: number;
+  options?: string[];
+  valueType?: "number" | "string";
 };
 
-type ManualFormState = Record<ManualFieldKey, string>;
-type ManualRow = Record<ManualFieldKey, number>;
+type ManualFormState = Partial<Record<ManualFieldKey, string>>;
+type ManualRow = Partial<Record<ManualFieldKey, string>>;
 
 type ConfusionMatrix = [
   [number, number],
@@ -94,9 +97,11 @@ type UploadCardProps = {
   info: string | null;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onTemplateDownload: () => void;
+  allowNumericGaps?: boolean;
+  purposeLabel?: string;
 };
 
-const manualFieldDefinitions: ManualField[] = [
+const PRETRAINED_MANUAL_FIELDS: ManualField[] = [
   { key: "koi_period", label: "Orbital Period (days)", helper: "koi_period", placeholder: "10.512", min: 0, step: 0.0001 },
   { key: "koi_depth", label: "Transit Depth (ppm)", helper: "koi_depth", placeholder: "850", min: 0, step: 0.01 },
   { key: "koi_duration", label: "Transit Duration (hrs)", helper: "koi_duration", placeholder: "3.5", min: 0, step: 0.0001 },
@@ -112,7 +117,17 @@ const manualFieldDefinitions: ManualField[] = [
   { key: "koi_teq", label: "Equilibrium Temp (K)", helper: "koi_teq", placeholder: "980", min: 0, step: 0.1 },
 ];
 
-const requiredHeaders = manualFieldDefinitions.map((field) => field.key);
+const USER_MANUAL_FIELDS: ManualField[] = [
+  ...PRETRAINED_MANUAL_FIELDS,
+  {
+    key: "koi_disposition",
+    label: "KOI Disposition",
+    helper: "koi_disposition",
+    placeholder: "CONFIRMED",
+    options: ["CONFIRMED", "CANDIDATE", "FALSE POSITIVE"],
+    valueType: "string",
+  },
+];
 
 function downloadCsv(content: string, filename: string) {
   const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
@@ -139,7 +154,12 @@ async function extractErrorMessage(response: Response): Promise<string> {
   }
 }
 
-function parseManualCsv(text: string): ManualRow[] {
+type CsvParseOptions = {
+  allowNumericGaps?: boolean;
+};
+
+function parseManualCsv(text: string, fields: ManualField[], options: CsvParseOptions = {}): ManualRow[] {
+  const { allowNumericGaps = false } = options;
   const lines = text
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -155,15 +175,17 @@ function parseManualCsv(text: string): ManualRow[] {
   const suggestions: string[] = [];
 
   headersRaw.forEach((header) => {
-    const matchingField = manualFieldDefinitions.find((field) => field.key.toLowerCase() === header.toLowerCase());
+    const matchingField = fields.find((field) => field.key.toLowerCase() === header.toLowerCase());
     if (!matchingField) {
-      suggestions.push(`Remove or rename "${header}" to one of: ${requiredHeaders.join(", ")}`);
+      const allowed = fields.map((field) => field.key).join(", ");
+      suggestions.push(`Remove or rename "${header}" to one of: ${allowed}`);
     } else if (matchingField.key !== header) {
       suggestions.push(`Rename "${header}" to "${matchingField.key}"`);
     }
   });
 
-  requiredHeaders.forEach((required) => {
+  fields.forEach((field) => {
+    const required = field.key;
     if (!headersLower.includes(required.toLowerCase())) {
       suggestions.push(`Add column "${required}" to the header row`);
     }
@@ -174,7 +196,8 @@ function parseManualCsv(text: string): ManualRow[] {
   }
 
   const indexByKey = new Map<ManualFieldKey, number>();
-  requiredHeaders.forEach((key) => {
+  fields.forEach((field) => {
+    const key = field.key;
     const idx = headersRaw.findIndex((header) => header.toLowerCase() === key.toLowerCase());
     indexByKey.set(key as ManualFieldKey, idx);
   });
@@ -190,16 +213,44 @@ function parseManualCsv(text: string): ManualRow[] {
       throw new Error(`Row ${lineIndex + 1} has ${cells.length} values but ${headersRaw.length} columns are expected.`);
     }
     const row = {} as ManualRow;
-    for (const field of manualFieldDefinitions) {
+    for (const field of fields) {
       const columnIndex = indexByKey.get(field.key);
       if (columnIndex === undefined) {
         continue;
       }
-      const numericValue = Number.parseFloat(cells[columnIndex]);
-      if (Number.isNaN(numericValue)) {
-        throw new Error(`All values must be numeric. Check column "${field.key}" in row ${lineIndex + 1}.`);
+      const rawValue = cells[columnIndex];
+      const expectsNumber = (field.valueType ?? "number") === "number";
+      if (expectsNumber) {
+        const sanitized = rawValue.trim();
+        const isNullLiteral = sanitized.toLowerCase() === "null";
+        if (sanitized.length === 0 || isNullLiteral) {
+          if (allowNumericGaps) {
+            continue;
+          }
+          throw new Error(`Column "${field.key}" requires a numeric value in row ${lineIndex + 1}.`);
+        }
+        const numericValue = Number.parseFloat(sanitized);
+        if (Number.isNaN(numericValue)) {
+          throw new Error(`All values must be numeric. Check column "${field.key}" in row ${lineIndex + 1}.`);
+        }
+        row[field.key] = sanitized;
+      } else {
+        const sanitized = rawValue.trim();
+        if (sanitized.length === 0) {
+          throw new Error(`Column "${field.key}" requires a value in row ${lineIndex + 1}.`);
+        }
+        if (field.options && field.options.length > 0) {
+          const matched = field.options.find((option) => option.toLowerCase() === sanitized.toLowerCase());
+          if (!matched) {
+            throw new Error(
+              `Column "${field.key}" must be one of: ${field.options.join(", ")} (row ${lineIndex + 1}).`
+            );
+          }
+          row[field.key] = matched;
+        } else {
+          row[field.key] = sanitized;
+        }
       }
-      row[field.key] = numericValue;
     }
     rows.push(row);
   }
@@ -215,8 +266,8 @@ function sanitizeCell(cell: string) {
   return cell.trim().replace(/^\"|\"$/g, "");
 }
 
-function createEmptyManualForm(): ManualFormState {
-  return manualFieldDefinitions.reduce<ManualFormState>((acc, field) => {
+function createEmptyManualForm(fields: ManualField[]): ManualFormState {
+  return fields.reduce<ManualFormState>((acc, field) => {
     acc[field.key] = "";
     return acc;
   }, {} as ManualFormState);
@@ -250,11 +301,19 @@ function formatTimestamp(value?: string) {
   return date.toLocaleString();
 }
 
+function extractSessionId(payload: Record<string, unknown> | null) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const raw = (payload as { session_id?: unknown }).session_id;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw : null;
+}
+
 export default function Home() {
   const [inputMode, setInputMode] = useState<InputMode>("manual");
   const [modelType, setModelType] = useState<ModelType>("pretrained");
   const [isManualModalOpen, setManualModalOpen] = useState(false);
-  const [manualForm, setManualForm] = useState<ManualFormState>(() => createEmptyManualForm());
+  const [manualForm, setManualForm] = useState<ManualFormState>(() => createEmptyManualForm(PRETRAINED_MANUAL_FIELDS));
   const [manualRows, setManualRows] = useState<ManualRow[]>([]);
   const [manualError, setManualError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -279,8 +338,15 @@ export default function Home() {
   const [userTrainLoading, setUserTrainLoading] = useState(false);
   const [userTrainError, setUserTrainError] = useState<string | null>(null);
   const [userTrainResult, setUserTrainResult] = useState<Record<string, unknown> | null>(null);
+  const [latestSessionId, setLatestSessionId] = useState<string | null>(null);
 
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+
+  const manualFields = useMemo(
+    () => (modelType === "pretrained" ? PRETRAINED_MANUAL_FIELDS : USER_MANUAL_FIELDS),
+    [modelType]
+  );
+  const requiredHeaders = useMemo(() => manualFields.map((field) => field.key), [manualFields]);
 
   const manualRowCount = manualRows.length;
   const confusionMatrix = modelInfo?.metrics?.confusion_matrix;
@@ -321,6 +387,19 @@ export default function Home() {
       cancelled = true;
     };
   }, [backendUrl]);
+
+  useEffect(() => {
+    setManualForm(createEmptyManualForm(manualFields));
+    setManualRows([]);
+    setManualError(null);
+    setUploadError(null);
+    setUploadInfo(null);
+    setUploadRowCount(0);
+    if (modelType === "user") {
+      setUserTrainError(null);
+    }
+  }, [manualFields, modelType]);
+
   function handleManualButtonClick() {
     setInputMode("manual");
     setManualModalOpen(true);
@@ -336,24 +415,34 @@ export default function Home() {
   }
 
   function handleManualAddRow() {
-    const emptyField = manualFieldDefinitions.find((field) => manualForm[field.key].trim() === "");
+    const emptyField = manualFields.find((field) => (manualForm[field.key] ?? "").trim() === "");
     if (emptyField) {
       setManualError(`Please provide a value for ${emptyField.helper ?? emptyField.label}.`);
       return;
     }
 
     const parsedRow = {} as ManualRow;
-    for (const field of manualFieldDefinitions) {
-      const numericValue = Number.parseFloat(manualForm[field.key]);
-      if (Number.isNaN(numericValue)) {
-        setManualError(`Use numeric values only for ${field.helper ?? field.label}.`);
-        return;
+    for (const field of manualFields) {
+      const rawValue = (manualForm[field.key] ?? "").trim();
+      const expectsNumber = (field.valueType ?? "number") === "number";
+      if (expectsNumber) {
+        const numericValue = Number.parseFloat(rawValue);
+        if (Number.isNaN(numericValue)) {
+          setManualError(`Use numeric values only for ${field.helper ?? field.label}.`);
+          return;
+        }
+        parsedRow[field.key] = rawValue;
+      } else {
+        if (field.options && !field.options.includes(rawValue)) {
+          setManualError(`Choose a valid value for ${field.helper ?? field.label}.`);
+          return;
+        }
+        parsedRow[field.key] = rawValue;
       }
-      parsedRow[field.key] = numericValue;
     }
 
     setManualRows((prev) => [...prev, parsedRow]);
-    setManualForm(createEmptyManualForm());
+    setManualForm(createEmptyManualForm(manualFields));
     setManualError(null);
   }
 
@@ -363,9 +452,9 @@ export default function Home() {
       return;
     }
 
-    const header = manualFieldDefinitions.map((field) => field.key).join(",");
+    const header = manualFields.map((field) => field.key).join(",");
     const body = manualRows
-      .map((row) => manualFieldDefinitions.map((field) => row[field.key].toString()).join(","))
+      .map((row) => manualFields.map((field) => (row[field.key] ?? "")).join(","))
       .join("\n");
     const csv = body.length > 0 ? `${header}\n${body}` : header;
 
@@ -375,11 +464,14 @@ export default function Home() {
   function handleUploadButtonClick() {
     setInputMode("upload");
     setUploadError(null);
+    if (modelType === "user") {
+      setUserTrainError(null);
+    }
   }
 
   function handleUploadTemplateDownload() {
-    const header = manualFieldDefinitions.map((field) => field.key).join(",");
-    const sampleRow = manualFieldDefinitions.map((field) => field.placeholder ?? "").join(",");
+    const header = manualFields.map((field) => field.key).join(",");
+    const sampleRow = manualFields.map((field) => field.placeholder ?? "").join(",");
     const csv = `${header}
 ${sampleRow}`;
     downloadCsv(csv, "winnhacks_template.csv");
@@ -443,27 +535,50 @@ ${sampleRow}`;
       return;
     }
 
+    const allowNumericGaps = modelType === "user";
     const reader = new FileReader();
     reader.onload = () => {
       try {
         const textContent = String(reader.result ?? "");
-        const rows = parseManualCsv(textContent);
+        const rows = parseManualCsv(textContent, manualFields, { allowNumericGaps });
         setUploadRowCount(rows.length);
-        setUploadInfo(`Validated ${rows.length} row${rows.length === 1 ? "" : "s"} from ${file.name}.`);
+        const uploadPurpose = modelType === "pretrained" ? "for pretrained inference" : "for user retraining";
+        setUploadInfo(
+          `Validated ${rows.length} row${rows.length === 1 ? "" : "s"} from ${file.name} ${uploadPurpose}.`
+        );
         setUploadError(null);
-        setPretrainedFile(file);
+        if (modelType === "pretrained") {
+          setPretrainedFile(file);
+          setPretrainedResult(null);
+          setPretrainedError(null);
+        } else {
+          setUserTrainFile(file);
+          setUserTrainResult(null);
+          setUserTrainError(null);
+        }
       } catch (error) {
         setUploadInfo(null);
         setUploadRowCount(0);
-        setUploadError(error instanceof Error ? error.message : "Unable to parse the provided CSV file.");
-        setPretrainedFile(null);
+        const message = error instanceof Error ? error.message : "Unable to parse the provided CSV file.";
+        setUploadError(message);
+        if (modelType === "pretrained") {
+          setPretrainedFile(null);
+        } else {
+          setUserTrainFile(null);
+          setUserTrainError(message);
+        }
       }
     };
     reader.onerror = () => {
       setUploadInfo(null);
       setUploadRowCount(0);
       setUploadError("Unable to read the selected file. Please try again.");
-      setPretrainedFile(null);
+      if (modelType === "pretrained") {
+        setPretrainedFile(null);
+      } else {
+        setUserTrainFile(null);
+        setUserTrainError('Unable to read the selected file. Please try again.');
+      }
     };
     reader.readAsText(file);
 
@@ -471,9 +586,38 @@ ${sampleRow}`;
   }
   function handleUserTrainFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
-    setUserTrainFile(file);
-    setUserTrainResult(null);
-    setUserTrainError(null);
+    if (!file) {
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setUserTrainError("Please upload a CSV file with extension .csv.");
+      setUserTrainFile(null);
+      event.target.value = "";
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const textContent = String(reader.result ?? "");
+        parseManualCsv(textContent, USER_MANUAL_FIELDS, { allowNumericGaps: true });
+        setUserTrainFile(file);
+        setUserTrainResult(null);
+        setUserTrainError(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to parse the provided CSV file.';
+        setUserTrainError(message);
+        setUserTrainFile(null);
+      }
+    };
+    reader.onerror = () => {
+      setUserTrainError('Unable to read the selected file. Please try again.');
+      setUserTrainFile(null);
+    };
+    reader.readAsText(file);
+
+    event.target.value = "";
   }
 
   function handleUserHyperparamChange(key: keyof typeof userHyperparams, value: string) {
@@ -514,6 +658,11 @@ ${sampleRow}`;
       }
       const data = (await response.json()) as Record<string, unknown>;
       setUserTrainResult(data);
+      const sessionId = extractSessionId(data);
+      if (sessionId) {
+        setLatestSessionId(sessionId);
+        setPretrainedSession(sessionId);
+      }
     } catch (error) {
       setUserTrainError(error instanceof Error ? error.message : 'Retraining request failed.');
     } finally {
@@ -603,11 +752,13 @@ ${sampleRow}`;
             {inputMode === "upload" ? (
               <div className="mt-10">
                 <UploadCard
-                  fields={manualFieldDefinitions}
+                  fields={manualFields}
                   error={uploadError}
                   info={uploadInfo}
                   onFileChange={handleUploadFileChange}
                   onTemplateDownload={handleUploadTemplateDownload}
+                  allowNumericGaps={modelType === "user"}
+                  purposeLabel={modelType === "pretrained" ? "Pretrained inference" : "User retraining"}
                 />
               </div>
             ) : null}
@@ -787,6 +938,24 @@ ${sampleRow}`;
                           className="w-full rounded-xl border border-cyan-400/30 bg-slate-950/60 px-4 py-3 text-sm text-white focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
                         />
                         <span className="text-[10px] text-slate-500">Leave blank to use the base model.</span>
+                        {latestSessionId ? (
+                          <div className="mt-1 flex items-center justify-between gap-2 text-[10px] normal-case">
+                            <span className="text-left text-emerald-300">Latest retrain session: {latestSessionId}</span>
+                            {pretrainedSession === latestSessionId ? (
+                              <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.4em] text-emerald-200">
+                                Applied
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setPretrainedSession(latestSessionId)}
+                                className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1 text-[9px] font-semibold uppercase tracking-[0.4em] text-emerald-200 transition hover:border-emerald-300/60 hover:bg-emerald-400/20"
+                              >
+                                Use session
+                              </button>
+                            )}
+                          </div>
+                        ) : null}
                       </label>
                     </div>
                     <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -843,6 +1012,9 @@ ${sampleRow}`;
                           className="w-full rounded-xl border border-cyan-400/30 bg-slate-950/60 px-4 py-3 text-sm text-white focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
                         />
                         <span className="text-[10px] text-slate-500">Required columns: {requiredHeaders.join(', ')}</span>
+                        <span className="text-[10px] text-emerald-300 normal-case">
+                          Numeric blanks or "NULL" entries are ignored when validating retraining data.
+                        </span>
                       </label>
                       <div className="rounded-xl border border-cyan-400/20 bg-slate-900/60 p-4 text-xs text-slate-300">
                         <p className="text-sm font-semibold text-cyan-200">Hyperparameters</p>
@@ -926,7 +1098,7 @@ ${sampleRow}`;
       <ManualInputModal
         open={isManualModalOpen}
         onClose={handleManualClose}
-        fields={manualFieldDefinitions}
+        fields={manualFields}
         formValues={manualForm}
         onFieldChange={handleManualFieldChange}
         onAddRow={handleManualAddRow}
@@ -1049,7 +1221,8 @@ function ManualInputModal({
             <p className="text-xs uppercase tracking-[0.6em] text-cyan-400">Manual Entry</p>
             <h3 className="mt-2 text-2xl font-semibold text-white">Add KOI Feature Rows</h3>
             <p className="mt-2 text-sm text-slate-300">
-              Provide numeric values for each KOI feature. Every feature must be filled for each row before it can be added.
+              Provide values for every required column. Numeric KOI features expect numbers, while the disposition column
+              (when retraining) must use the listed labels. Each field must be filled before a row can be added.
             </p>
           </div>
           <button
@@ -1063,22 +1236,43 @@ function ManualInputModal({
 
         <div className="max-h-[70vh] overflow-y-auto px-8 py-6">
           <div className="grid gap-4 sm:grid-cols-2">
-            {fields.map((field) => (
-              <label key={field.key} className="flex flex-col gap-2 text-left text-sm">
-                <span className="font-medium text-white">{field.helper ?? field.label}</span>
-                <input
-                  type="number"
-                  min={field.min}
-                  max={field.max}
-                  step={field.step ?? 0.0001}
-                  placeholder={field.placeholder}
-                  value={formValues[field.key]}
-                  onChange={(event) => onFieldChange(field.key, event.target.value)}
-                  className="rounded-xl border border-cyan-400/30 bg-slate-900 px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
-                />
-                <span className="text-xs uppercase tracking-[0.3em] text-slate-500">{field.key}</span>
-              </label>
-            ))}
+            {fields.map((field) => {
+              const isNumeric = (field.valueType ?? "number") === "number";
+              const value = formValues[field.key] ?? "";
+              return (
+                <label key={field.key} className="flex flex-col gap-2 text-left text-sm">
+                  <span className="font-medium text-white">{field.helper ?? field.label}</span>
+                  {field.options && field.options.length > 0 ? (
+                    <select
+                      value={value}
+                      onChange={(event) => onFieldChange(field.key, event.target.value)}
+                      className="rounded-xl border border-cyan-400/30 bg-slate-900 px-4 py-3 text-sm text-white focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+                    >
+                      <option value="">
+                        Select {field.helper ?? field.label}
+                      </option>
+                      {field.options.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={isNumeric ? "number" : "text"}
+                      {...(isNumeric
+                        ? { min: field.min, max: field.max, step: field.step ?? 0.0001 }
+                        : {})}
+                      placeholder={field.placeholder}
+                      value={value}
+                      onChange={(event) => onFieldChange(field.key, event.target.value)}
+                      className="rounded-xl border border-cyan-400/30 bg-slate-900 px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+                    />
+                  )}
+                  <span className="text-xs uppercase tracking-[0.3em] text-slate-500">{field.key}</span>
+                </label>
+              );
+            })}
           </div>
 
           {error ? <p className="mt-4 text-sm text-rose-300">{error}</p> : null}
@@ -1122,7 +1316,7 @@ function ManualInputModal({
                     <tr key={rowIndex} className="odd:bg-slate-900/60">
                       {fields.map((field) => (
                         <td key={field.key} className="px-4 py-2 text-slate-200">
-                          {row[field.key]}
+                          {row[field.key] ?? ""}
                         </td>
                       ))}
                     </tr>
@@ -1147,7 +1341,7 @@ function ManualInputModal({
 
 
 
-function UploadCard({ fields, error, info, onFileChange, onTemplateDownload }: UploadCardProps) {
+function UploadCard({ fields, error, info, onFileChange, onTemplateDownload, allowNumericGaps = false, purposeLabel }: UploadCardProps) {
   return (
     <div className="rounded-2xl border border-cyan-400/20 bg-slate-950/70 p-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1158,6 +1352,14 @@ function UploadCard({ fields, error, info, onFileChange, onTemplateDownload }: U
             Ensure the header row uses the exact feature names listed below. Column order does not matter, but the labels must
             match.
           </p>
+          {purposeLabel ? (
+            <p className="mt-1 text-xs uppercase tracking-[0.4em] text-cyan-400">{purposeLabel}</p>
+          ) : null}
+          {allowNumericGaps ? (
+            <p className="mt-1 text-xs text-emerald-300">
+              Numeric columns may include blank values; they will be ignored during validation.
+            </p>
+          ) : null}
         </div>
         <button
           type="button"
