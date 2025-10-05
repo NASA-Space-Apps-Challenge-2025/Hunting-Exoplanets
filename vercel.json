@@ -1,24 +1,17 @@
 {
   "builds": [
     {
-      "src": "api/index.py",
-      "use": "@vercel/python",
+      "src": "Dockerfile",
+      "use": "@vercel/static-build",
       "config": {
-        "maxLambdaSize": "250mb"
+        "distDir": "."
       }
     }
   ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "api/index.py"
+      "dest": "/"
     }
-  ],
-  "functions": {
-    "api/index.py": {
-      "maxDuration": 60,
-      "memory": 3008,
-      "includeFiles": "backend/models/base_model/**"
-    }
-  }
+  ]
 }
